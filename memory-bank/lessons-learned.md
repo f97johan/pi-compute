@@ -27,3 +27,11 @@
 - **Reference data must be exact**: The pi_1000.txt file must have exactly 1002 characters (2 for "3." + 1000 digits). Having extra digits causes length mismatch failures.
 
 - **String comparison tests need exact lengths**: When comparing substrings, ensure the expected string length matches the substring length being extracted. Off-by-one in string length causes false failures.
+
+- **FFT convolution base must account for accumulation**: With base B and FFT size N, the maximum convolution value is B² × N. This must fit in double precision (53-bit mantissa): B² × N < 2^53. Base 2^24 overflows for N > 32 (i.e., numbers with more than ~100 digits). Base 2^15 is safe for FFT sizes up to 2^20 (~1M elements, sufficient for 100M+ digit numbers).
+
+- **NVCC is stricter about includes than GCC/Clang**: Always include `<string>`, `<vector>`, etc. explicitly in CUDA headers. Transitive includes that work with GCC may not work with NVCC.
+
+- **CUDA architecture auto-detection**: Use `CUDA_ARCHITECTURES "native"` (CMake 3.24+) instead of hardcoding architecture numbers. CUDA 13.x dropped support for compute_70 (Volta), so hardcoded lists break on newer toolkits.
+
+- **GPU AMI required**: Standard Amazon Linux AMIs don't include NVIDIA drivers even on GPU instances. Use a "Deep Learning AMI" or "GPU AMI" that comes with drivers + CUDA pre-installed.
