@@ -19,6 +19,7 @@
 
 #include "pi_engine.h"
 #include "binary_splitting.h"
+#include "../io/base_converter.h"
 #include <chrono>
 #include <iostream>
 #include <iomanip>
@@ -123,12 +124,10 @@ PiResult PiEngine::compute(const PiConfig& config) {
                   << std::endl;
     }
 
-    // Step 3: Convert integer to string
-    // mpz_get_str for integers is O(n*log(n)) — much faster than mpf_get_str
+    // Step 3: Convert integer to string using subquadratic divide-and-conquer
+    // Uses precomputed power-of-10 tree for O(n·log(n)²) conversion
     auto conv_start = Clock::now();
-    char* raw = mpz_get_str(nullptr, 10, pi_int);
-    std::string digits_str(raw);
-    free(raw);
+    std::string digits_str = BaseConverter::fast_integer_to_decimal(pi_int);
 
     // Format: insert "." after first digit
     // pi_int should be like 314159265... (config.digits+1 digits total)

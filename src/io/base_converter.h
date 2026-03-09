@@ -41,19 +41,7 @@ public:
     static std::string fast_integer_to_decimal(const mpz_t n, size_t min_digits = 0);
 
 private:
-    /**
-     * @brief Recursive divide-and-conquer decimal conversion.
-     * @param n The integer to convert (must be non-negative)
-     * @param num_digits Expected number of digits
-     * @param result Output string (appended to)
-     */
-    static void dc_convert(const mpz_t n, size_t num_digits, std::string& result);
-
-    /**
-     * @brief Threshold below which we use GMP's mpz_get_str directly.
-     * For small numbers, the overhead of divide-and-conquer isn't worth it.
-     */
-    static constexpr size_t DC_THRESHOLD = 1000;
+    // Implementation uses free functions with PowerTree in the .cpp file
 };
 
 } // namespace pi
