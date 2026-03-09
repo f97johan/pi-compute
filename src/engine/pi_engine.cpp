@@ -37,6 +37,9 @@ PiResult PiEngine::compute(const PiConfig& config) {
 
     // Step 2: Run binary splitting to get P, Q, R
     BinarySplitting bs(multiplier_);
+    if (config.verbose) {
+        std::cout << "  Threads: " << bs.thread_count() << std::endl;
+    }
     BSResult bsr = bs.compute(0, terms);
 
     if (config.verbose) {

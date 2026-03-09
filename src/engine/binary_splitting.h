@@ -21,11 +21,12 @@
  *     R(a,b) = Q(m,b) * R(a,m) + P(a,m) * R(m,b)
  *
  * Final computation:
- *   pi = (Q(0,N) * 426880 * sqrt(10005)) / (13591409 * Q(0,N) + R(0,N))
+ *   pi = (Q(0,N) * 426880 * sqrt(10005)) / R(0,N)
  */
 
 #include <gmp.h>
 #include <cstddef>
+#include <thread>
 #include "../arithmetic/multiplier.h"
 
 namespace pi {
@@ -53,8 +54,9 @@ public:
     /**
      * @brief Construct a binary splitting engine.
      * @param multiplier The multiplication strategy to use (CPU or GPU)
+     * @param num_threads Number of threads for parallel computation (0 = auto-detect)
      */
-    explicit BinarySplitting(Multiplier& multiplier);
+    explicit BinarySplitting(Multiplier& multiplier, unsigned int num_threads = 0);
 
     /**
      * @brief Compute the binary splitting for the range [a, b).
@@ -71,8 +73,20 @@ public:
      */
     static unsigned long terms_needed(size_t digits);
 
+    /**
+     * @brief Get the number of threads being used.
+     */
+    unsigned int thread_count() const { return num_threads_; }
+
 private:
     Multiplier& multiplier_;
+    unsigned int num_threads_;
+
+    /**
+     * @brief Minimum range size to consider parallelizing.
+     * Below this, sequential is faster (avoids thread overhead).
+     */
+    static constexpr unsigned long PARALLEL_THRESHOLD = 64;
 
     /**
      * @brief Compute the base case for a single term at index a.
@@ -83,6 +97,19 @@ private:
      * @brief Merge two BSResults: left=[a,m) and right=[m,b).
      */
     BSResult merge(BSResult& left, BSResult& right);
+
+    /**
+     * @brief Sequential compute (no threading).
+     */
+    BSResult compute_sequential(unsigned long a, unsigned long b);
+
+    /**
+     * @brief Parallel compute using thread pool.
+     * @param a Start index
+     * @param b End index
+     * @param depth Current recursion depth (limits thread spawning)
+     */
+    BSResult compute_parallel(unsigned long a, unsigned long b, int depth);
 };
 
 } // namespace pi
