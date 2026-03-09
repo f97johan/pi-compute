@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <string>
 #include <cufft.h>
 
 namespace pi {

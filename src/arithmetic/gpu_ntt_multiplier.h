@@ -16,6 +16,8 @@
 #include "multiplier.h"
 #include "../gpu/ntt_engine.h"
 #include <cstddef>
+#include <string>
+#include <vector>
 
 namespace pi {
 
