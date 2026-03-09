@@ -65,8 +65,7 @@ echo "[1/5] Detected OS: $OS_ID"
 echo "[2/5] Installing dependencies..."
 
 install_deps_amzn() {
-    # Amazon Linux 2 or AL2023
-    sudo yum groupinstall -y "Development Tools" 2>/dev/null || true
+    # Amazon Linux 2 or AL2023 — install only what we need (not the full "Development Tools" group)
     sudo yum install -y gcc gcc-c++ make cmake3 gmp-devel git
 
     # cmake3 may be installed as 'cmake3' on AL2
@@ -81,12 +80,13 @@ install_deps_amzn() {
 
 install_deps_ubuntu() {
     sudo apt-get update
-    sudo apt-get install -y build-essential cmake libgmp-dev git
+    # Install only the minimal set: compiler, make, cmake, GMP, git
+    sudo apt-get install -y gcc g++ make cmake libgmp-dev git
 }
 
 install_deps_fedora() {
-    sudo dnf groupinstall -y "Development Tools"
-    sudo dnf install -y cmake gmp-devel git
+    # Install only what we need (not the full "Development Tools" group)
+    sudo dnf install -y gcc gcc-c++ make cmake gmp-devel git
 }
 
 case "$OS_ID" in
