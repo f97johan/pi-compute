@@ -25,7 +25,8 @@ USAGE:
 OPTIONS:
     --digits <N>        Number of decimal digits to compute (required)
     --gpu               Enable GPU acceleration (requires CUDA build)
-    --gpu-threshold <N> Min GMP limbs for GPU path (default: 1000)
+    --gpus <N>          Number of GPUs to use (0 = auto-detect all, default: 0)
+    --gpu-threshold <N> Min GMP limbs for GPU path (default: 10000)
     --output <FILE>     Output file path (default: pi_digits.txt)
     --verbose           Verbose progress output
     --help              Show this help message
@@ -33,7 +34,7 @@ OPTIONS:
 EXAMPLES:
     pi_compute --digits 1000000 --verbose
     pi_compute --digits 10000000 --gpu --verbose
-    pi_compute --digits 100000000 --gpu --output pi_100M.txt --verbose
+    pi_compute --digits 100000000 --gpu --gpus 8 --output pi_100M.txt --verbose
 )" << std::endl;
 }
 
@@ -41,7 +42,8 @@ int main(int argc, char* argv[]) {
     pi::PiConfig config;
     bool has_digits = false;
     bool use_gpu = false;
-    size_t gpu_threshold = 1000;
+    size_t gpu_threshold = 10000;
+    int num_gpus = 0;  // 0 = auto-detect
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -55,6 +57,9 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--output" && i + 1 < argc) {
             config.output_file = argv[++i];
         } else if (arg == "--gpu") {
+            use_gpu = true;
+        } else if (arg == "--gpus" && i + 1 < argc) {
+            num_gpus = std::stoi(argv[++i]);
             use_gpu = true;
         } else if (arg == "--gpu-threshold" && i + 1 < argc) {
             gpu_threshold = std::stoul(argv[++i]);
@@ -84,10 +89,11 @@ int main(int argc, char* argv[]) {
 
         if (use_gpu) {
 #ifdef PI_CUDA_ENABLED
-            auto gpu_mult = std::make_unique<pi::GpuNttMultiplier>(gpu_threshold);
+            auto gpu_mult = std::make_unique<pi::GpuNttMultiplier>(gpu_threshold, num_gpus);
             if (config.verbose) {
                 std::cout << "GPU: " << gpu_mult->device_name()
-                          << " (threshold: " << gpu_threshold << " limbs)" << std::endl;
+                          << " (" << gpu_mult->gpu_count() << " GPU(s)"
+                          << ", threshold: " << gpu_threshold << " limbs)" << std::endl;
             }
             multiplier = std::move(gpu_mult);
 #else

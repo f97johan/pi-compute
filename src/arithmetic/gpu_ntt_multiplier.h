@@ -4,11 +4,11 @@
  * @file gpu_ntt_multiplier.h
  * @brief GPU-accelerated multiplication using cuFFT-based NTT.
  *
- * Implements the Multiplier interface, converting GMP mpz_t integers
- * to base-2^24 digit arrays, performing FFT convolution on GPU,
- * and converting back to GMP format.
+ * Supports multi-GPU: auto-detects available GPUs and creates one NTT engine
+ * per GPU. Multiplications are dispatched to GPUs round-robin, with per-GPU
+ * mutexes for thread safety.
  *
- * Only available when compiled with ENABLE_CUDA=ON.
+ * On single-GPU systems, behaves identically to a simple serialized multiplier.
  */
 
 #ifdef PI_CUDA_ENABLED
@@ -19,8 +19,21 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <memory>
+#include <atomic>
 
 namespace pi {
+
+/**
+ * @brief Per-GPU context: NTT engine + mutex for thread-safe access.
+ */
+struct GpuContext {
+    std::unique_ptr<gpu::NttEngine> engine;
+    std::mutex mutex;
+    int device_id;
+
+    explicit GpuContext(int id) : device_id(id) {}
+};
 
 class GpuNttMultiplier : public Multiplier {
 public:
@@ -28,17 +41,23 @@ public:
      * @brief Construct a GPU multiplier.
      * @param threshold Minimum number of GMP limbs for GPU path.
      *                  Below this, falls back to GMP CPU multiply.
+     * @param num_gpus Number of GPUs to use (0 = auto-detect all available)
      */
-    explicit GpuNttMultiplier(size_t threshold = 10000);
+    explicit GpuNttMultiplier(size_t threshold = 10000, int num_gpus = 0);
     ~GpuNttMultiplier() override = default;
 
     void multiply(mpz_t result, const mpz_t a, const mpz_t b) override;
     void square(mpz_t result, const mpz_t a) override;
 
     /**
-     * @brief Get the GPU device name.
+     * @brief Get the GPU device name(s).
      */
     std::string device_name() const;
+
+    /**
+     * @brief Get number of GPUs in use.
+     */
+    int gpu_count() const { return static_cast<int>(gpu_contexts_.size()); }
 
     /**
      * @brief Set the limb threshold for GPU vs CPU selection.
@@ -51,29 +70,29 @@ public:
     size_t threshold() const { return threshold_; }
 
 private:
-    gpu::NttEngine ntt_engine_;
+    std::vector<std::unique_ptr<GpuContext>> gpu_contexts_;
     size_t threshold_;
-    mutable std::mutex gpu_mutex_;  ///< Serializes GPU access (cuFFT is not thread-safe)
+    std::atomic<uint64_t> next_gpu_{0};  ///< Round-robin GPU selector
 
     /**
-     * @brief Convert GMP mpz_t to base-2^24 digit array.
-     * @param n The GMP integer (absolute value is used)
-     * @param digits Output vector of base-2^24 digits (LSB first)
+     * @brief Convert GMP mpz_t to base-2^15 digit array.
      */
-    static void mpz_to_base24(const mpz_t n, std::vector<uint32_t>& digits);
+    static void mpz_to_base15(const mpz_t n, std::vector<uint32_t>& digits);
 
     /**
-     * @brief Convert base-2^24 digit array back to GMP mpz_t.
-     * @param digits Base-2^24 digits (LSB first)
-     * @param len Number of digits
-     * @param result Output GMP integer
+     * @brief Convert base-2^15 digit array back to GMP mpz_t.
      */
-    static void base24_to_mpz(const uint32_t* digits, size_t len, mpz_t result);
+    static void base15_to_mpz(const uint32_t* digits, size_t len, mpz_t result);
 
     /**
      * @brief Check if operands are large enough to benefit from GPU.
      */
     bool should_use_gpu(const mpz_t a, const mpz_t b) const;
+
+    /**
+     * @brief Select the next GPU context (round-robin).
+     */
+    GpuContext& select_gpu();
 };
 
 } // namespace pi

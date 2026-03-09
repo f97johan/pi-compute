@@ -33,7 +33,11 @@ namespace gpu {
  */
 class NttEngine {
 public:
-    NttEngine();
+    /**
+     * @brief Construct an NTT engine bound to a specific GPU.
+     * @param device_id CUDA device ID (default: 0)
+     */
+    explicit NttEngine(int device_id = 0);
     ~NttEngine();
 
     // Non-copyable
@@ -76,6 +80,7 @@ private:
      */
     static size_t next_power_of_2(size_t n);
 
+    int device_id_ = 0;  ///< CUDA device this engine is bound to
     cufftHandle plan_ = 0;
     size_t current_plan_size_ = 0;
 
@@ -85,6 +90,11 @@ private:
     cufftDoubleComplex* d_c_ = nullptr;
     double* d_result_ = nullptr;
     size_t allocated_size_ = 0;
+
+    /**
+     * @brief Set the CUDA device for this engine's operations.
+     */
+    void activate_device() const;
 };
 
 } // namespace gpu

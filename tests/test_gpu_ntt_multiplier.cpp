@@ -17,7 +17,7 @@
 
 class GpuNttMultiplierTest : public ::testing::Test {
 protected:
-    pi::GpuNttMultiplier gpu_mult{1};  // threshold=1 to force GPU path
+    pi::GpuNttMultiplier gpu_mult{1, 0};  // threshold=1 to force GPU path, auto-detect GPUs
     pi::GmpMultiplier cpu_mult;
     mpz_t a, b, gpu_result, cpu_result;
 
@@ -55,6 +55,11 @@ TEST_F(GpuNttMultiplierTest, DeviceName) {
     EXPECT_FALSE(name.empty());
     EXPECT_NE(name, "unknown");
     std::cout << "GPU: " << name << std::endl;
+}
+
+TEST_F(GpuNttMultiplierTest, GpuCount) {
+    EXPECT_GE(gpu_mult.gpu_count(), 1);
+    std::cout << "GPU count: " << gpu_mult.gpu_count() << std::endl;
 }
 
 TEST_F(GpuNttMultiplierTest, MultiplySmallNumbers) {

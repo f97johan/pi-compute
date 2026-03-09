@@ -34,7 +34,15 @@
 namespace pi {
 namespace gpu {
 
-NttEngine::NttEngine() {}
+NttEngine::NttEngine(int device_id) : device_id_(device_id) {}
+
+void NttEngine::activate_device() const {
+    cudaError_t err = cudaSetDevice(device_id_);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("Failed to set CUDA device ") +
+            std::to_string(device_id_) + ": " + cudaGetErrorString(err));
+    }
+}
 
 NttEngine::~NttEngine() {
     if (plan_ != 0) {
@@ -66,6 +74,7 @@ size_t NttEngine::next_power_of_2(size_t n) {
 }
 
 void NttEngine::ensure_plan(size_t fft_size) {
+    activate_device();
     if (fft_size == current_plan_size_) return;
 
     // Destroy old plan
