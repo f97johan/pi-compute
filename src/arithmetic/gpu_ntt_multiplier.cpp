@@ -18,9 +18,12 @@
 
 namespace pi {
 
-// Base for GPU representation: 2^15 = 32768
-static constexpr uint32_t GPU_BASE_BITS = 15;
-static constexpr uint32_t GPU_BASE = 1u << GPU_BASE_BITS;  // 32768
+// Base for GPU representation: 2^12 = 4096
+// For FFT convolution, max value = B^2 * N must fit in double precision (2^53).
+// With B=2^12 and N=2^24: (2^12)^2 * 2^24 = 2^48 < 2^53 ✓ (safe with margin)
+// With B=2^15 and N=2^23: (2^15)^2 * 2^23 = 2^53 — AT THE LIMIT, fails on A100
+static constexpr uint32_t GPU_BASE_BITS = 12;
+static constexpr uint32_t GPU_BASE = 1u << GPU_BASE_BITS;  // 4096
 
 GpuNttMultiplier::GpuNttMultiplier(size_t threshold, int num_gpus)
     : threshold_(threshold) {

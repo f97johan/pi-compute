@@ -150,9 +150,9 @@ size_t NttEngine::multiply(const uint32_t* a, size_t a_len,
     extract_and_normalize(d_c_, d_result_, fft_size);
 
     // Carry propagation: convert from double to uint32 with carries
-    // Base is 2^15 = 32768 (chosen so that B^2 * N < 2^53 for large FFTs)
-    // With B=2^15 and N=2^20: (2^15)^2 * 2^20 = 2^50 < 2^53 ✓
-    size_t actual_len = propagate_carries_gpu(d_result_, result, conv_len, 32768);
+    // Base is 2^12 = 4096 (chosen so that B^2 * N < 2^53 for large FFTs)
+    // With B=2^12 and N=2^24: (2^12)^2 * 2^24 = 2^48 < 2^53 ✓
+    size_t actual_len = propagate_carries_gpu(d_result_, result, conv_len, 4096);
 
     return actual_len;
 }
