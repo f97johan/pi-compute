@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Aggressive optimization: -O3 + CPU-specific tuning (AVX2, AVX-512, etc.)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -DNDEBUG")
+
 # Option to enable CUDA (off by default for macOS dev)
 option(ENABLE_CUDA "Enable CUDA GPU acceleration" OFF)
 
