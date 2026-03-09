@@ -1,28 +1,29 @@
 # Active Context
 
-## Current Focus
-Phase 2 GPU code written and pushed. Ready for testing on NVIDIA GPU instance.
+## Current State
+Project is mature with CPU-only being the optimal path. GPU acceleration implemented but not beneficial due to per-call overhead exceeding GMP's optimized CPU FFT.
 
-## Recent Changes
-- Implemented full CUDA + cuFFT GPU multiplication pipeline
-- NttEngine wraps cuFFT for forward/inverse FFT
-- Pointwise multiply and carry propagation CUDA kernels
-- GpuNttMultiplier bridges GMP mpz_t ↔ GPU base-2^24 format
-- 12 GPU tests (compile only with ENABLE_CUDA=ON)
-- --gpu CLI flag with graceful fallback
-- CPU-only build unchanged (46 tests still pass)
-- All pushed to GitHub
+## Key Findings from Benchmarking
 
-## Immediate Next Steps
-1. Spin up p3.2xlarge (or g7e.2xlarge) on AWS
-2. Clone repo and run: `./scripts/setup_cloud_gpu.sh`
-3. Run GPU tests: `./build/tests/pi_tests`
-4. Benchmark GPU vs CPU: `./scripts/benchmark.sh`
-5. Debug any GPU-specific issues (FFT precision, carry propagation edge cases)
+### p4d.24xlarge (96 vCPU + 8x A100), 100M digits:
+- CPU (96 threads): **67.9s** — Binary splitting 36%, Final computation 23%, Decimal conversion 41%
+- GPU 1x A100: 166s (slower — per-call overhead dominates)
+- GPU 8x A100: 90s (multi-GPU helps but still slower than CPU)
 
-## Key Files (Phase 2)
-- `src/gpu/ntt_engine.cu` — cuFFT wrapper
-- `src/gpu/pointwise_multiply.cu` — Complex multiply kernel
-- `src/gpu/carry_propagation.cu` — Carry propagation (CPU-side for now)
-- `src/arithmetic/gpu_ntt_multiplier.cpp` — GMP ↔ GPU bridge
-- `tests/test_gpu_ntt_multiplier.cpp` — 12 GPU tests
+### g6e.xlarge (4 vCPU + 1x L40S), 100M digits:
+- CPU (4 threads): 82.4s
+- GPU L40S: 96.5-114s (FP64-limited)
+
+### Apple Silicon (10 threads), 10M digits:
+- CPU: 2.78s (multi-threaded) / 4.27s (single-threaded)
+
+## Why GPU Doesn't Help
+1. GMP's CPU FFT is incredibly optimized (hand-tuned assembly)
+2. Per-GPU-call overhead: ~150ms (conversion + transfer + FFT + transfer back)
+3. 3,064 GPU calls × 150ms = 460s cumulative overhead
+4. Decimal conversion (41% of time) is untouched by GPU
+
+## Remaining Optimization Opportunities
+- Integer NTT (custom CUDA kernels, not cuFFT) — would use INT32 throughput
+- MPIR instead of GMP — potentially 10-30% faster
+- Compute pi as integer (avoid mpf entirely) — eliminates decimal conversion bottleneck
