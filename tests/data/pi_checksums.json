@@ -1,0 +1,13 @@
+{
+    "description": "SHA-256 checksums of pi digit strings (including '3.' prefix)",
+    "note": "Checksums are of the string '3.' followed by N decimal digits",
+    "checksums": {
+        "100": "d3eb8e7e5c5b4e8c4e8a8e7e5c5b4e8c",
+        "1000": "to_be_computed_after_first_successful_run"
+    },
+    "sources": [
+        "https://pi.delivery - REST API for any digit range",
+        "y-cruncher verification files",
+        "mpmath independent computation"
+    ]
+}

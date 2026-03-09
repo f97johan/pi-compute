@@ -1,0 +1,32 @@
+# Build output
+build/
+cmake-build-*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled output
+*.o
+*.a
+*.so
+*.dylib
+
+# Generated files
+compile_commands.json
+
+# Output files
+pi_digits.txt
+*.txt.bak
+
+# Python
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,29 @@
+# Lessons Learned
+
+## Implementation Lessons
+
+- **Chudnovsky binary splitting formula**: The final formula is `pi = 426880 * sqrt(10005) * Q(0,N) / R(0,N)`. The denominator is **just R**, not `13591409*Q + R`. This is because R already accumulates the `a(k) = 13591409 + 545140134*k` linear terms during the binary splitting base case. Getting this wrong gives pi/2 or other wrong multiples.
+
+- **Guard digits are essential**: When computing N digits of pi, you must compute with N+100 (or more) guard digits and then truncate. The last few digits of any arbitrary-precision computation are unreliable due to rounding in intermediate operations. Without guard digits, the last 1-2 digits will be wrong.
+
+- **GMP's mpf_get_str returns fewer digits than requested** if the internal precision is insufficient. Always ensure the mpf precision (in bits) is set to at least `digits * 3.3219 + 64` before any operation.
+
+- **Binary splitting base case for k=0 is special**: P(0,1)=1, Q(0,1)=1, R(0,1)=13591409. For k≥1, P includes the sign alternation via negation.
+
+- **LAPACK/BLAS are not applicable** for arbitrary-precision single-number arithmetic. They are linear algebra libraries (matrices, eigenvalues). This is a common misconception when people think "numerical computing = LAPACK."
+
+- **Fortran's numerical heritage doesn't help here** — Fortran excels at array/matrix operations but has a poor arbitrary-precision library ecosystem. GMP (C library) is the standard.
+
+- **cuFFT precision limits**: Double-precision cuFFT is sufficient for numbers up to ~10^15 digits when using base 2^24. Beyond that, you need split-radix or multi-precision FFT techniques. For our 10M–100M target, single double-precision convolution is fine.
+
+- **Apple Silicon has no CUDA**: Apple dropped NVIDIA support. Metal Compute Shaders exist but have limited ecosystem for this use case. Best approach: develop algorithm on Mac, run GPU code on cloud NVIDIA instance.
+
+- **GMP is extremely hard to beat**: 30+ years of hand-tuned assembly. Don't try to write a faster big-integer library unless you're prepared for years of work. Use GMP and focus on the interesting parts (algorithm architecture, GPU integration).
+
+- **GMP on Apple Silicon is surprisingly fast**: 10M digits of pi in 4.27 seconds using only CPU. The wide SIMD units and unified memory architecture of Apple Silicon make GMP very competitive even without GPU acceleration.
+
+## Testing Lessons
+
+- **Reference data must be exact**: The pi_1000.txt file must have exactly 1002 characters (2 for "3." + 1000 digits). Having extra digits causes length mismatch failures.
+
+- **String comparison tests need exact lengths**: When comparing substrings, ensure the expected string length matches the substring length being extracted. Off-by-one in string length causes false failures.
