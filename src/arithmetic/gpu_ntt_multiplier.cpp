@@ -37,33 +37,48 @@ bool GpuNttMultiplier::should_use_gpu(const mpz_t a, const mpz_t b) const {
 }
 
 void GpuNttMultiplier::mpz_to_base24(const mpz_t n, std::vector<uint32_t>& digits) {
-    // Get the number of bits in n
-    size_t bits = mpz_sizeinbase(n, 2);
-    if (bits == 0 || mpz_sgn(n) == 0) {
+    // O(n) conversion: extract base-2^15 digits directly from GMP's limb array.
+    // GMP stores numbers as arrays of mp_limb_t (64-bit on most platforms).
+    // We extract GPU_BASE_BITS-bit chunks by bit-shifting through the limbs.
+
+    if (mpz_sgn(n) == 0) {
         digits.assign(1, 0);
         return;
     }
 
-    // Number of base-2^24 digits needed
+    size_t bits = mpz_sizeinbase(n, 2);
     size_t num_digits = (bits + GPU_BASE_BITS - 1) / GPU_BASE_BITS;
     digits.resize(num_digits);
 
-    // Extract base-2^24 digits by repeated division
-    // More efficient: directly extract from GMP's internal limb representation
-    mpz_t temp, remainder;
-    mpz_init(temp);
-    mpz_init(remainder);
-    mpz_abs(temp, n);
+    // Export raw bytes from GMP (little-endian word order, native byte order)
+    size_t count = 0;
+    // Use mpz_export to get raw limb data as bytes
+    // We'll work directly with the limb pointer for maximum efficiency
+    const mp_limb_t* limbs = mpz_limbs_read(n);
+    size_t num_limbs = mpz_size(n);
 
-    for (size_t i = 0; i < num_digits; ++i) {
-        // digits[i] = temp % 2^24
-        digits[i] = static_cast<uint32_t>(mpz_fdiv_ui(temp, GPU_BASE));
-        // temp = temp / 2^24
-        mpz_fdiv_q_2exp(temp, temp, GPU_BASE_BITS);
+    // Extract GPU_BASE_BITS-bit digits from the limb array
+    // Each limb is GMP_NUMB_BITS bits (typically 64)
+    uint64_t accumulator = 0;
+    int acc_bits = 0;
+    size_t limb_idx = 0;
+    size_t digit_idx = 0;
+    const uint32_t mask = GPU_BASE - 1;  // 0x7FFF for base 2^15
+
+    while (digit_idx < num_digits) {
+        // Fill accumulator with more bits from limbs
+        while (acc_bits < GPU_BASE_BITS && limb_idx < num_limbs) {
+            accumulator |= (static_cast<uint64_t>(limbs[limb_idx]) << acc_bits);
+            acc_bits += GMP_NUMB_BITS;
+            limb_idx++;
+        }
+
+        // Extract one digit
+        digits[digit_idx] = static_cast<uint32_t>(accumulator & mask);
+        accumulator >>= GPU_BASE_BITS;
+        acc_bits -= GPU_BASE_BITS;
+        digit_idx++;
     }
-
-    mpz_clear(temp);
-    mpz_clear(remainder);
 
     // Remove trailing zeros
     while (digits.size() > 1 && digits.back() == 0) {
@@ -72,18 +87,54 @@ void GpuNttMultiplier::mpz_to_base24(const mpz_t n, std::vector<uint32_t>& digit
 }
 
 void GpuNttMultiplier::base24_to_mpz(const uint32_t* digits, size_t len, mpz_t result) {
-    mpz_set_ui(result, 0);
+    // O(n) conversion: pack base-2^15 digits directly into GMP limbs.
 
-    // Build from most significant digit down: result = result * base + digit
-    mpz_t base_power;
-    mpz_init(base_power);
-
-    for (size_t i = len; i > 0; --i) {
-        mpz_mul_2exp(result, result, GPU_BASE_BITS);  // result <<= 24
-        mpz_add_ui(result, result, digits[i - 1]);
+    if (len == 0) {
+        mpz_set_ui(result, 0);
+        return;
     }
 
-    mpz_clear(base_power);
+    // Calculate how many limbs we need
+    size_t total_bits = static_cast<size_t>(len) * GPU_BASE_BITS;
+    size_t num_limbs = (total_bits + GMP_NUMB_BITS - 1) / GMP_NUMB_BITS;
+
+    // Get writable limb pointer from GMP
+    mp_limb_t* limbs = mpz_limbs_write(result, num_limbs);
+
+    // Pack digits into limbs
+    uint64_t accumulator = 0;
+    int acc_bits = 0;
+    size_t limb_idx = 0;
+    size_t digit_idx = 0;
+
+    while (digit_idx < len) {
+        accumulator |= (static_cast<uint64_t>(digits[digit_idx]) << acc_bits);
+        acc_bits += GPU_BASE_BITS;
+        digit_idx++;
+
+        // Flush full limbs
+        while (acc_bits >= GMP_NUMB_BITS && limb_idx < num_limbs) {
+            limbs[limb_idx] = static_cast<mp_limb_t>(accumulator);
+            accumulator >>= GMP_NUMB_BITS;
+            acc_bits -= GMP_NUMB_BITS;
+            limb_idx++;
+        }
+    }
+
+    // Flush remaining bits
+    if (acc_bits > 0 && limb_idx < num_limbs) {
+        limbs[limb_idx] = static_cast<mp_limb_t>(accumulator);
+        limb_idx++;
+    }
+
+    // Zero any remaining limbs
+    while (limb_idx < num_limbs) {
+        limbs[limb_idx] = 0;
+        limb_idx++;
+    }
+
+    // Tell GMP how many limbs are actually used
+    mpz_limbs_finish(result, num_limbs);
 }
 
 void GpuNttMultiplier::multiply(mpz_t result, const mpz_t a, const mpz_t b) {
