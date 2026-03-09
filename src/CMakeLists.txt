@@ -40,10 +40,19 @@ if(ENABLE_CUDA)
         CUDA::cufft
         CUDA::cudart
     )
-    # Set CUDA architecture (support Volta through Blackwell)
-    set_target_properties(pi_engine_lib PROPERTIES
-        CUDA_ARCHITECTURES "70;75;80;86;89;90"
-    )
+    # Auto-detect GPU architecture at build time.
+    # "native" queries the installed GPU; falls back to a safe default if no GPU present.
+    # CMake 3.24+ supports "native". For older CMake, we use a broad range.
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+        set_target_properties(pi_engine_lib PROPERTIES
+            CUDA_ARCHITECTURES "native"
+        )
+    else()
+        # Fallback: support Ampere through Blackwell (skip retired Volta/Turing)
+        set_target_properties(pi_engine_lib PROPERTIES
+            CUDA_ARCHITECTURES "80;86;89;90;100"
+        )
+    endif()
 endif()
 
 # Main executable
