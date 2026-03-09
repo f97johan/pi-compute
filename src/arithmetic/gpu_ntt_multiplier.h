@@ -55,6 +55,16 @@ public:
     std::string device_name() const;
 
     /**
+     * @brief Print timing statistics for GPU operations.
+     */
+    void print_stats() const;
+
+    /**
+     * @brief Reset timing statistics.
+     */
+    void reset_stats();
+
+    /**
      * @brief Get number of GPUs in use.
      */
     int gpu_count() const { return static_cast<int>(gpu_contexts_.size()); }
@@ -69,30 +79,27 @@ public:
      */
     size_t threshold() const { return threshold_; }
 
+    /// Timing statistics (accumulated across all multiply calls)
+    struct Stats {
+        std::atomic<uint64_t> gpu_calls{0};
+        std::atomic<uint64_t> cpu_fallback_calls{0};
+        std::atomic<uint64_t> convert_to_ns{0};    ///< GMP → base-2^12 conversion
+        std::atomic<uint64_t> gpu_compute_ns{0};    ///< GPU FFT multiply (including transfer)
+        std::atomic<uint64_t> convert_from_ns{0};   ///< base-2^12 → GMP conversion
+        std::atomic<uint64_t> total_gpu_ns{0};      ///< Total time in GPU multiply path
+    };
+
 private:
     std::vector<std::unique_ptr<GpuContext>> gpu_contexts_;
     size_t threshold_;
-    std::atomic<uint64_t> next_gpu_{0};  ///< Round-robin GPU selector
+    std::atomic<uint64_t> next_gpu_{0};
+    mutable Stats stats_;
 
-    /**
-     * @brief Convert GMP mpz_t to base-2^15 digit array.
-     */
     static void mpz_to_base15(const mpz_t n, std::vector<uint32_t>& digits);
-
-    /**
-     * @brief Convert base-2^15 digit array back to GMP mpz_t.
-     */
     static void base15_to_mpz(const uint32_t* digits, size_t len, mpz_t result);
-
-    /**
-     * @brief Check if operands are large enough to benefit from GPU.
-     */
     bool should_use_gpu(const mpz_t a, const mpz_t b) const;
-
-    /**
-     * @brief Select the next GPU context (round-robin).
-     */
     GpuContext& select_gpu();
+
 };
 
 } // namespace pi

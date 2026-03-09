@@ -14,6 +14,8 @@
 #include <cstring>
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
+#include <chrono>
 #include <cuda_runtime.h>
 
 namespace pi {
@@ -140,11 +142,17 @@ void GpuNttMultiplier::base15_to_mpz(const uint32_t* digits, size_t len, mpz_t r
 }
 
 void GpuNttMultiplier::multiply(mpz_t result, const mpz_t a, const mpz_t b) {
+    using Clock = std::chrono::high_resolution_clock;
+
     // Fall back to GMP for small operands
     if (!should_use_gpu(a, b)) {
+        stats_.cpu_fallback_calls.fetch_add(1);
         mpz_mul(result, a, b);
         return;
     }
+
+    auto total_start = Clock::now();
+    stats_.gpu_calls.fetch_add(1);
 
     // Determine sign
     int sign_a = mpz_sgn(a);
@@ -156,15 +164,18 @@ void GpuNttMultiplier::multiply(mpz_t result, const mpz_t a, const mpz_t b) {
         return;
     }
 
-    // Convert to base-2^15 (CPU, thread-safe, no GPU needed)
+    // Convert to base-2^12 (CPU, thread-safe)
+    auto conv_to_start = Clock::now();
     std::vector<uint32_t> digits_a, digits_b;
     mpz_to_base15(a, digits_a);
     mpz_to_base15(b, digits_b);
+    auto conv_to_end = Clock::now();
 
     size_t max_result_len = digits_a.size() + digits_b.size();
     std::vector<uint32_t> result_digits(max_result_len, 0);
 
     // Select a GPU and lock it for this multiplication
+    auto gpu_start = Clock::now();
     GpuContext& ctx = select_gpu();
     size_t actual_len;
     {
@@ -175,17 +186,69 @@ void GpuNttMultiplier::multiply(mpz_t result, const mpz_t a, const mpz_t b) {
             result_digits.data(), max_result_len
         );
     }
+    auto gpu_end = Clock::now();
 
     // Convert back to GMP (CPU, thread-safe)
+    auto conv_from_start = Clock::now();
     base15_to_mpz(result_digits.data(), actual_len, result);
+    auto conv_from_end = Clock::now();
 
     if (result_sign < 0) {
         mpz_neg(result, result);
     }
+
+    auto total_end = Clock::now();
+
+    // Accumulate stats (nanoseconds)
+    auto ns = [](auto start, auto end) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    };
+    stats_.convert_to_ns.fetch_add(ns(conv_to_start, conv_to_end));
+    stats_.gpu_compute_ns.fetch_add(ns(gpu_start, gpu_end));
+    stats_.convert_from_ns.fetch_add(ns(conv_from_start, conv_from_end));
+    stats_.total_gpu_ns.fetch_add(ns(total_start, total_end));
 }
 
 void GpuNttMultiplier::square(mpz_t result, const mpz_t a) {
     multiply(result, a, a);
+}
+
+void GpuNttMultiplier::print_stats() const {
+    auto to_sec = [](uint64_t ns) { return static_cast<double>(ns) / 1e9; };
+
+    uint64_t gpu = stats_.gpu_calls.load();
+    uint64_t cpu = stats_.cpu_fallback_calls.load();
+    double conv_to = to_sec(stats_.convert_to_ns.load());
+    double gpu_compute = to_sec(stats_.gpu_compute_ns.load());
+    double conv_from = to_sec(stats_.convert_from_ns.load());
+    double total = to_sec(stats_.total_gpu_ns.load());
+
+    std::cout << "  GPU Multiplier Stats:" << std::endl;
+    std::cout << "    GPU multiply calls:    " << gpu << std::endl;
+    std::cout << "    CPU fallback calls:    " << cpu << std::endl;
+    if (gpu > 0) {
+        std::cout << "    GMP→base12 conversion: " << std::fixed << std::setprecision(3)
+                  << conv_to << "s" << std::endl;
+        std::cout << "    GPU FFT compute:       " << gpu_compute << "s" << std::endl;
+        std::cout << "    base12→GMP conversion: " << conv_from << "s" << std::endl;
+        std::cout << "    Total GPU path time:   " << total << "s" << std::endl;
+        if (total > 0) {
+            std::cout << "    Breakdown: convert "
+                      << std::setprecision(1) << ((conv_to + conv_from) / total * 100) << "%"
+                      << " | GPU " << (gpu_compute / total * 100) << "%"
+                      << " | other " << ((total - conv_to - gpu_compute - conv_from) / total * 100) << "%"
+                      << std::endl;
+        }
+    }
+}
+
+void GpuNttMultiplier::reset_stats() {
+    stats_.gpu_calls = 0;
+    stats_.cpu_fallback_calls = 0;
+    stats_.convert_to_ns = 0;
+    stats_.gpu_compute_ns = 0;
+    stats_.convert_from_ns = 0;
+    stats_.total_gpu_ns = 0;
 }
 
 } // namespace pi

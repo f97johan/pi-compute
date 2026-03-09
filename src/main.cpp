@@ -87,9 +87,14 @@ int main(int argc, char* argv[]) {
         // Select multiplier: GPU or CPU
         std::unique_ptr<pi::Multiplier> multiplier;
 
+#ifdef PI_CUDA_ENABLED
+        pi::GpuNttMultiplier* gpu_mult_ptr = nullptr;
+#endif
+
         if (use_gpu) {
 #ifdef PI_CUDA_ENABLED
             auto gpu_mult = std::make_unique<pi::GpuNttMultiplier>(gpu_threshold, num_gpus);
+            gpu_mult_ptr = gpu_mult.get();
             if (config.verbose) {
                 std::cout << "GPU: " << gpu_mult->device_name()
                           << " (" << gpu_mult->gpu_count() << " GPU(s)"
@@ -107,6 +112,13 @@ int main(int argc, char* argv[]) {
 
         pi::PiEngine engine(*multiplier);
         pi::PiResult result = engine.compute(config);
+
+#ifdef PI_CUDA_ENABLED
+        // Print GPU stats in verbose mode
+        if (config.verbose && gpu_mult_ptr) {
+            gpu_mult_ptr->print_stats();
+        }
+#endif
 
         // Write to file
         pi::ChunkedWriter writer(config.output_file);
