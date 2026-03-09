@@ -1,24 +1,28 @@
 # Active Context
 
 ## Current Focus
-Phase 1 complete. CPU-only pi engine is fully functional with 46 passing tests.
+Phase 2 GPU code written and pushed. Ready for testing on NVIDIA GPU instance.
 
 ## Recent Changes
-- Implemented full Chudnovsky + binary splitting algorithm in C++
-- All 46 tests passing (unit, integration, validation)
-- Benchmarked: 10M digits in 4.27s on Apple Silicon
-- Fixed formula bug: denominator should be R(0,N) not 13591409*Q+R (R already includes the linear term)
-- Fixed precision: added 100 guard digits + truncation for exact last-digit correctness
-- Fixed reference file: trimmed to exactly 1002 chars (3. + 1000 digits)
+- Implemented full CUDA + cuFFT GPU multiplication pipeline
+- NttEngine wraps cuFFT for forward/inverse FFT
+- Pointwise multiply and carry propagation CUDA kernels
+- GpuNttMultiplier bridges GMP mpz_t ↔ GPU base-2^24 format
+- 12 GPU tests (compile only with ENABLE_CUDA=ON)
+- --gpu CLI flag with graceful fallback
+- CPU-only build unchanged (46 tests still pass)
+- All pushed to GitHub
 
 ## Immediate Next Steps
-1. Phase 2: GPU acceleration with CUDA + cuFFT
-2. Implement NttEngine wrapping cuFFT
-3. Implement GpuNttMultiplier with GMP limb conversion
-4. Benchmark GPU vs CPU at various scales
+1. Spin up p3.2xlarge (or g7e.2xlarge) on AWS
+2. Clone repo and run: `./scripts/setup_cloud_gpu.sh`
+3. Run GPU tests: `./build/tests/pi_tests`
+4. Benchmark GPU vs CPU: `./scripts/benchmark.sh`
+5. Debug any GPU-specific issues (FFT precision, carry propagation edge cases)
 
-## Key Files
-- `src/engine/pi_engine.cpp` — Main orchestrator
-- `src/engine/binary_splitting.cpp` — Chudnovsky binary splitting
-- `src/arithmetic/multiplier.h` — Strategy pattern interface (CPU/GPU)
-- `tests/` — 46 tests across 7 suites
+## Key Files (Phase 2)
+- `src/gpu/ntt_engine.cu` — cuFFT wrapper
+- `src/gpu/pointwise_multiply.cu` — Complex multiply kernel
+- `src/gpu/carry_propagation.cu` — Carry propagation (CPU-side for now)
+- `src/arithmetic/gpu_ntt_multiplier.cpp` — GMP ↔ GPU bridge
+- `tests/test_gpu_ntt_multiplier.cpp` — 12 GPU tests

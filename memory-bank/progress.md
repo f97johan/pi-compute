@@ -5,17 +5,23 @@
 - [x] Research document: `plans/pi-computation-research.md`
 - [x] Architecture design: `plans/architecture.md`
 - [x] Memory bank initialization
-- [x] Phase 1: CPU-only pi engine
-  - [x] CMake project with GMP + Google Test
-  - [x] Multiplier interface + GmpMultiplier (10 tests)
-  - [x] BinarySplitting with Chudnovsky formula (8 tests)
-  - [x] NewtonDivider for division and sqrt (8 tests)
-  - [x] BaseConverter for decimal output (5 tests)
-  - [x] ChunkedWriter for streaming file output (6 tests)
-  - [x] PiEngine orchestrator (5 integration tests)
-  - [x] Validation against reference pi digits (4 tests)
-  - [x] CLI with --digits, --output, --verbose flags
-  - [x] README.md
+- [x] Phase 1: CPU-only pi engine (46 tests, 10M digits in 4.27s)
+- [x] Phase 2: GPU code written and pushed
+  - [x] NttEngine wrapping cuFFT
+  - [x] Pointwise multiply CUDA kernel
+  - [x] Carry propagation
+  - [x] GpuNttMultiplier (GMP ↔ GPU bridge)
+  - [x] 12 GPU tests
+  - [x] --gpu CLI flag
+  - [x] Linux build scripts (setup.sh, benchmark.sh, setup_cloud_gpu.sh)
+  - [x] GitHub repo: https://github.com/f97johan/pi-compute
+
+## In Progress
+- [ ] Test GPU code on actual NVIDIA hardware (p3.2xlarge or g7e.2xlarge)
+
+## Remaining
+- [ ] Phase 3: Optimization (checkpointing, async transfers, profiling)
+- [ ] Phase 4: Verification & polish (BBP verifier, benchmark plots)
 
 ## Benchmarks (Apple Silicon, CPU-only)
 | Digits | Time | Terms |
@@ -26,16 +32,8 @@
 | 1,000,000 | 0.28s | 70,522 |
 | 10,000,000 | 4.27s | 705,145 |
 
-## Remaining
-- [ ] Phase 2: GPU acceleration (CUDA + cuFFT NTT)
-- [ ] Phase 3: Optimization & scale (checkpointing, async, profiling)
-- [ ] Phase 4: Verification & polish (BBP verifier, benchmark plots)
-
-## Known Issues
-- None currently. All 46 tests pass.
-
 ## Bugs Fixed
-1. **Formula bug**: Denominator was `13591409*Q + R` but should be just `R` — the binary splitting R already incorporates the `a(k) = A + Bk` linear terms
-2. **Precision bug**: Last digit was wrong due to insufficient guard digits. Fixed by computing with 100 extra guard digits and truncating
-3. **Reference file**: Had 1024 digits instead of 1000. Trimmed to exact 1002 chars
-4. **Test string comparison**: BaseConverter test compared 16 chars against 15-char expected string
+1. Formula: denominator is R(0,N) not 13591409*Q+R
+2. Precision: 100 guard digits + truncation
+3. Reference file: trimmed to exact 1002 chars
+4. Test string comparison: off-by-one in expected length
