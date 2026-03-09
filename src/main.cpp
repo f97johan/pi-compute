@@ -7,12 +7,14 @@
 #include <string>
 #include <cstdlib>
 #include <memory>
+#include <functional>
 #include "engine/pi_engine.h"
 #include "arithmetic/gmp_multiplier.h"
 #include "io/chunked_writer.h"
 
 #ifdef PI_CUDA_ENABLED
 #include "arithmetic/gpu_ntt_multiplier.h"
+#include "arithmetic/int_ntt_multiplier.h"
 #endif
 
 void print_usage() {
@@ -24,7 +26,8 @@ USAGE:
 
 OPTIONS:
     --digits <N>        Number of decimal digits to compute (required)
-    --gpu               Enable GPU acceleration (requires CUDA build)
+    --gpu               Enable GPU via cuFFT (FP64, best for data center GPUs)
+    --ntt               Enable GPU via integer NTT (INT64, best for consumer GPUs)
     --gpus <N>          Number of GPUs to use (0 = auto-detect all, default: 0)
     --gpu-threshold <N> Min GMP limbs for GPU path (default: 10000)
     --output <FILE>     Output file path (default: pi_digits.txt)
@@ -42,6 +45,7 @@ int main(int argc, char* argv[]) {
     pi::PiConfig config;
     bool has_digits = false;
     bool use_gpu = false;
+    bool use_ntt = false;
     size_t gpu_threshold = 10000;
     int num_gpus = 0;  // 0 = auto-detect
 
@@ -58,6 +62,8 @@ int main(int argc, char* argv[]) {
             config.output_file = argv[++i];
         } else if (arg == "--gpu") {
             use_gpu = true;
+        } else if (arg == "--ntt") {
+            use_ntt = true;
         } else if (arg == "--gpus" && i + 1 < argc) {
             num_gpus = std::stoi(argv[++i]);
             use_gpu = true;
@@ -84,26 +90,45 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        // Select multiplier: GPU or CPU
+        // Select multiplier: GPU (cuFFT), NTT (integer), or CPU
         std::unique_ptr<pi::Multiplier> multiplier;
+        std::string mode_name = "CPU";
 
 #ifdef PI_CUDA_ENABLED
-        pi::GpuNttMultiplier* gpu_mult_ptr = nullptr;
+        // Function pointer for printing stats (set if GPU/NTT mode)
+        std::function<void()> print_gpu_stats;
 #endif
 
-        if (use_gpu) {
+        if (use_ntt) {
+#ifdef PI_CUDA_ENABLED
+            auto ntt_mult = std::make_unique<pi::IntNttMultiplier>(gpu_threshold, num_gpus);
+            if (config.verbose) {
+                std::cout << "Int NTT: " << ntt_mult->device_name()
+                          << " (" << ntt_mult->gpu_count() << " GPU(s)"
+                          << ", threshold: " << gpu_threshold << " limbs)" << std::endl;
+            }
+            auto* ntt_ptr = ntt_mult.get();
+            print_gpu_stats = [ntt_ptr]() { ntt_ptr->print_stats(); };
+            multiplier = std::move(ntt_mult);
+            mode_name = "NTT";
+#else
+            std::cerr << "Error: --ntt requires CUDA build" << std::endl;
+            multiplier = std::make_unique<pi::GmpMultiplier>();
+#endif
+        } else if (use_gpu) {
 #ifdef PI_CUDA_ENABLED
             auto gpu_mult = std::make_unique<pi::GpuNttMultiplier>(gpu_threshold, num_gpus);
-            gpu_mult_ptr = gpu_mult.get();
             if (config.verbose) {
                 std::cout << "GPU: " << gpu_mult->device_name()
                           << " (" << gpu_mult->gpu_count() << " GPU(s)"
                           << ", threshold: " << gpu_threshold << " limbs)" << std::endl;
             }
+            auto* gpu_ptr = gpu_mult.get();
+            print_gpu_stats = [gpu_ptr]() { gpu_ptr->print_stats(); };
             multiplier = std::move(gpu_mult);
+            mode_name = "GPU";
 #else
-            std::cerr << "Error: --gpu requires CUDA build (cmake -DENABLE_CUDA=ON)" << std::endl;
-            std::cerr << "Falling back to CPU..." << std::endl;
+            std::cerr << "Error: --gpu requires CUDA build" << std::endl;
             multiplier = std::make_unique<pi::GmpMultiplier>();
 #endif
         } else {
@@ -114,9 +139,8 @@ int main(int argc, char* argv[]) {
         pi::PiResult result = engine.compute(config);
 
 #ifdef PI_CUDA_ENABLED
-        // Print GPU stats in verbose mode
-        if (config.verbose && gpu_mult_ptr) {
-            gpu_mult_ptr->print_stats();
+        if (config.verbose && print_gpu_stats) {
+            print_gpu_stats();
         }
 #endif
 
@@ -127,8 +151,7 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Computed " << config.digits << " digits of pi in "
                   << result.elapsed_seconds << " seconds ("
-                  << result.terms_used << " terms"
-                  << (use_gpu ? ", GPU" : ", CPU") << ")." << std::endl;
+                  << result.terms_used << " terms, " << mode_name << ")." << std::endl;
         std::cout << "Output written to: " << config.output_file << std::endl;
 
         // Print first 80 characters as preview

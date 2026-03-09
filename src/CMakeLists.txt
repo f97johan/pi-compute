@@ -17,7 +17,9 @@ if(ENABLE_CUDA)
         gpu/ntt_engine.cu
         gpu/pointwise_multiply.cu
         gpu/carry_propagation.cu
+        gpu/int_ntt.cu
         arithmetic/gpu_ntt_multiplier.cpp
+        arithmetic/int_ntt_multiplier.cpp
     )
 endif()
 
