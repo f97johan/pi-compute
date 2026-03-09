@@ -13,9 +13,12 @@
 
 namespace pi {
 
-// Base for GPU representation: 2^24 = 16777216
-static constexpr uint32_t GPU_BASE_BITS = 24;
-static constexpr uint32_t GPU_BASE = 1u << GPU_BASE_BITS;  // 16777216
+// Base for GPU representation: 2^15 = 32768
+// Chosen so that B^2 * N < 2^53 for FFT sizes up to 2^20 (~1M elements).
+// With B=2^15: (2^15)^2 * 2^20 = 2^50 < 2^53 (safe for double precision)
+// With B=2^24: (2^24)^2 * 2^14 = 2^62 > 2^53 (OVERFLOW — causes wrong results)
+static constexpr uint32_t GPU_BASE_BITS = 15;
+static constexpr uint32_t GPU_BASE = 1u << GPU_BASE_BITS;  // 32768
 
 GpuNttMultiplier::GpuNttMultiplier(size_t threshold)
     : threshold_(threshold) {}

@@ -140,9 +140,10 @@ size_t NttEngine::multiply(const uint32_t* a, size_t a_len,
     // The inverse FFT in cuFFT is unnormalized, so we divide by N
     extract_and_normalize(d_c_, d_result_, fft_size);
 
-    // Carry propagation on GPU: convert from double to uint32 with carries
-    // Base is 2^24 = 16777216
-    size_t actual_len = propagate_carries_gpu(d_result_, result, conv_len, 16777216);
+    // Carry propagation: convert from double to uint32 with carries
+    // Base is 2^15 = 32768 (chosen so that B^2 * N < 2^53 for large FFTs)
+    // With B=2^15 and N=2^20: (2^15)^2 * 2^20 = 2^50 < 2^53 ✓
+    size_t actual_len = propagate_carries_gpu(d_result_, result, conv_len, 32768);
 
     return actual_len;
 }
