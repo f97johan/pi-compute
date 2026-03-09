@@ -28,10 +28,12 @@ std::string GpuNttMultiplier::device_name() const {
 }
 
 bool GpuNttMultiplier::should_use_gpu(const mpz_t a, const mpz_t b) const {
-    // Use GPU if either operand has more limbs than the threshold
+    // Use GPU only if BOTH operands are large enough to benefit.
+    // Small × large is still fast on CPU; the GPU overhead isn't worth it.
     size_t a_limbs = mpz_size(a);
     size_t b_limbs = mpz_size(b);
-    return (a_limbs >= threshold_ || b_limbs >= threshold_);
+    size_t min_limbs = std::min(a_limbs, b_limbs);
+    return (min_limbs >= threshold_);
 }
 
 void GpuNttMultiplier::mpz_to_base24(const mpz_t n, std::vector<uint32_t>& digits) {

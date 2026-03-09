@@ -28,7 +28,7 @@ public:
      * @param threshold Minimum number of GMP limbs for GPU path.
      *                  Below this, falls back to GMP CPU multiply.
      */
-    explicit GpuNttMultiplier(size_t threshold = 1000);
+    explicit GpuNttMultiplier(size_t threshold = 10000);
     ~GpuNttMultiplier() override = default;
 
     void multiply(mpz_t result, const mpz_t a, const mpz_t b) override;
