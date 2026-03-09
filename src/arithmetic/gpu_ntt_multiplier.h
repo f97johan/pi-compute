@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <mutex>
 
 namespace pi {
 
@@ -52,6 +53,7 @@ public:
 private:
     gpu::NttEngine ntt_engine_;
     size_t threshold_;
+    mutable std::mutex gpu_mutex_;  ///< Serializes GPU access (cuFFT is not thread-safe)
 
     /**
      * @brief Convert GMP mpz_t to base-2^24 digit array.

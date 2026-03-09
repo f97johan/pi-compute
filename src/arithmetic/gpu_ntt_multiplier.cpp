@@ -153,12 +153,16 @@ void GpuNttMultiplier::multiply(mpz_t result, const mpz_t a, const mpz_t b) {
     size_t max_result_len = digits_a.size() + digits_b.size();
     std::vector<uint32_t> result_digits(max_result_len, 0);
 
-    // GPU multiply via NTT
-    size_t actual_len = ntt_engine_.multiply(
-        digits_a.data(), digits_a.size(),
-        digits_b.data(), digits_b.size(),
-        result_digits.data(), max_result_len
-    );
+    // GPU multiply via NTT — serialized because cuFFT is not thread-safe
+    size_t actual_len;
+    {
+        std::lock_guard<std::mutex> lock(gpu_mutex_);
+        actual_len = ntt_engine_.multiply(
+            digits_a.data(), digits_a.size(),
+            digits_b.data(), digits_b.size(),
+            result_digits.data(), max_result_len
+        );
+    }
 
     // Convert back to GMP
     base24_to_mpz(result_digits.data(), actual_len, result);
