@@ -144,7 +144,14 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
     size_t max_size = std::max({mpz_size(left.P), mpz_size(left.Q),
                                  mpz_size(right.P), mpz_size(right.Q)});
 
-    if (max_size > 1000 && num_threads_ > 1) {
+    // Only parallelize merge for moderate-sized operands.
+    // For very large operands (>10M limbs = ~80MB each), parallel merge
+    // creates 4 concurrent multiplications that can consume 4x the memory.
+    // At 10B digits, this causes OOM on 64GB systems.
+    // Threshold: 10M limbs (~80MB). Above this, sequential merge.
+    static constexpr size_t PARALLEL_MERGE_MAX_LIMBS = 10000000;
+
+    if (max_size > 1000 && max_size < PARALLEL_MERGE_MAX_LIMBS && num_threads_ > 1) {
         mpz_t t_qr, t_pr, t_pp;
         mpz_init(t_qr); mpz_init(t_pr); mpz_init(t_pp);
 
