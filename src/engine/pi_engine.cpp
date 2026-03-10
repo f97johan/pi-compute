@@ -167,24 +167,59 @@ PiResult PiEngine::compute(const PiConfig& config) {
     }
 
     // Convert to string using parallel divide-and-conquer
-    // (precomputed power-of-10 tree + multi-threaded)
-    std::string digits_str = BaseConverter::parallel_to_decimal(pi_int);
-
-    // Format: insert "." after first digit
-    // pi_int should be like 314159265... (config.digits+1 digits total)
+    // For large numbers (>100M digits), stream directly to file to save RAM
     std::string result_str;
-    if (digits_str.size() > 1) {
-        result_str = digits_str.substr(0, 1) + "." + digits_str.substr(1);
-    } else {
-        result_str = digits_str;
-    }
+    size_t num_digits = mpz_sizeinbase(pi_int, 10);
+    bool use_streaming = (num_digits > 100000000);  // Stream for >100M digits
 
-    // Trim to requested digits
-    size_t dot_pos = result_str.find('.');
-    if (dot_pos != std::string::npos) {
-        size_t target_len = dot_pos + 1 + config.digits;
-        if (result_str.size() > target_len) {
-            result_str = result_str.substr(0, target_len);
+    if (use_streaming && !config.output_file.empty()) {
+        // Streaming mode: write digits directly to file
+        if (config.verbose) {
+            std::cout << "  Streaming " << num_digits << " digits to file..." << std::endl;
+        }
+
+        FILE* out = fopen(config.output_file.c_str(), "w");
+        if (!out) throw std::runtime_error("Cannot open output file: " + config.output_file);
+
+        // Write "3." prefix
+        fputc('3', out);
+        fputc('.', out);
+
+        // Stream digits via callback
+        size_t digits_written = 0;
+        BaseConverter::parallel_to_decimal(pi_int, 0,
+            [&](size_t offset, const std::string& chunk) {
+                // Skip the leading "3" (first digit), write the rest
+                if (offset == 0 && !chunk.empty()) {
+                    // First chunk starts with "3", skip it
+                    fwrite(chunk.data() + 1, 1, chunk.size() - 1, out);
+                    digits_written += chunk.size() - 1;
+                } else {
+                    size_t to_write = std::min(chunk.size(), config.digits - digits_written);
+                    fwrite(chunk.data(), 1, to_write, out);
+                    digits_written += to_write;
+                }
+            }
+        );
+
+        fclose(out);
+        result_str = "3.14159...  (streamed to " + config.output_file + ")";
+    } else {
+        // In-memory mode: build full string
+        std::string digits_str = BaseConverter::parallel_to_decimal(pi_int);
+
+        if (digits_str.size() > 1) {
+            result_str = digits_str.substr(0, 1) + "." + digits_str.substr(1);
+        } else {
+            result_str = digits_str;
+        }
+
+        size_t dot_pos = result_str.find('.');
+        if (dot_pos != std::string::npos) {
+            size_t target_len = dot_pos + 1 + config.digits;
+            if (result_str.size() > target_len) {
+                result_str = result_str.substr(0, target_len);
+            }
         }
     }
 
