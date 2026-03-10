@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.14)
 project(pi_compute VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -12,6 +12,9 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -DNDEBUG")
 option(ENABLE_CUDA "Enable CUDA GPU acceleration" OFF)
 
 if(ENABLE_CUDA)
+    if(CMAKE_VERSION VERSION_LESS "3.18")
+        message(FATAL_ERROR "CUDA support requires CMake 3.18+. You have ${CMAKE_VERSION}. Build without -DENABLE_CUDA=ON for CPU-only.")
+    endif()
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
     add_compile_definitions(PI_CUDA_ENABLED)
