@@ -305,11 +305,11 @@ size_t IntNttEngine::multiply(const uint32_t* a, size_t a_len,
     size_t conv_len = a_len + b_len;
     size_t ntt_size = next_power_of_2(conv_len);
 
+    // Check if NTT size fits within all primes' limits
     for (int i = 0; i < NUM_PRIMES; i++) {
         if (ntt_size > (1ULL << NTT_PRIMES[i].max_log2)) {
-            throw std::runtime_error("NTT size " + std::to_string(ntt_size) +
-                " exceeds prime " + std::to_string(NTT_PRIMES[i].p) +
-                " limit 2^" + std::to_string(NTT_PRIMES[i].max_log2));
+            // Too large for NTT — return 0 to signal caller should use CPU fallback
+            return 0;
         }
     }
 

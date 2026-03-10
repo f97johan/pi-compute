@@ -143,6 +143,13 @@ void IntNttMultiplier::multiply(mpz_t result, const mpz_t a, const mpz_t b) {
             dr.data(), max_len, DIGIT_BASE);
     }
 
+    // If NTT returned 0, the arrays were too large — fall back to CPU
+    if (actual_len == 0) {
+        stats_.cpu_fallback_calls.fetch_add(1);
+        mpz_mul(result, a, b);
+        return;
+    }
+
     digits_to_mpz(dr.data(), actual_len, result, DIGIT_BASE_BITS);
     if (sign < 0) mpz_neg(result, result);
 
