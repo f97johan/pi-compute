@@ -35,6 +35,7 @@ target_include_directories(pi_engine_lib PUBLIC
 
 target_link_libraries(pi_engine_lib PUBLIC
     ${GMP_LIBRARY}
+    Threads::Threads
 )
 
 if(ENABLE_CUDA)

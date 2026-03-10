@@ -24,6 +24,9 @@ endif()
 find_library(GMP_LIBRARY gmp REQUIRED)
 find_path(GMP_INCLUDE_DIR gmp.h REQUIRED)
 
+# Find pthreads (needed for std::async/std::thread on Linux)
+find_package(Threads REQUIRED)
+
 # Google Test via FetchContent
 include(FetchContent)
 FetchContent_Declare(
