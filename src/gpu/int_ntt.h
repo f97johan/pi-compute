@@ -84,6 +84,9 @@ private:
     PrimeBuffers buffers_[NUM_PRIMES];
     size_t current_ntt_size_ = 0;
 
+    // Opaque pointer to TwiddleCache (defined in .cu file)
+    void* twiddle_cache_ptr_ = nullptr;
+
     void ensure_buffers(size_t ntt_size);
     static size_t next_power_of_2(size_t n);
 };
