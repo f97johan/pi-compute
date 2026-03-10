@@ -106,22 +106,65 @@ PiResult PiEngine::compute(const PiConfig& config) {
     }
 
     // Step 3: Extract as integer and convert to string
-    // Multiply by 10^digits to get integer digits, then use mpz_get_str
     auto conv_start = Clock::now();
 
-    // Scale pi by 10^digits to get an integer
-    mpf_t scale_f;
-    mpf_init2(scale_f, precision_bits);
-    mpz_t scale_z;
-    mpz_init(scale_z);
-    mpz_ui_pow_ui(scale_z, 10, config.digits);
-    mpf_set_z(scale_f, scale_z);
-    mpf_mul(pi_value, pi_value, scale_f);
-
-    // Extract integer part
     mpz_t pi_int;
     mpz_init(pi_int);
-    mpz_set_f(pi_int, pi_value);
+
+    // Check for pi_int checkpoint (skips both binary splitting AND final computation)
+    std::string pi_int_ckpt = config.checkpoint_dir.empty() ? "" :
+                               config.checkpoint_dir + "/pi_int_" + std::to_string(config.digits) + ".ckpt";
+    bool loaded_pi_int = false;
+
+    if (!pi_int_ckpt.empty()) {
+        FILE* f = fopen(pi_int_ckpt.c_str(), "rb");
+        if (f) {
+            size_t count;
+            if (fread(&count, sizeof(size_t), 1, f) == 1 && count > 0) {
+                std::vector<uint8_t> data(count);
+                if (fread(data.data(), 1, count, f) == count) {
+                    mpz_import(pi_int, count, -1, 1, -1, 0, data.data());
+                    loaded_pi_int = true;
+                    if (config.verbose) {
+                        std::cout << "  Loaded pi_int checkpoint (" << count << " bytes)" << std::endl;
+                    }
+                }
+            }
+            fclose(f);
+        }
+    }
+
+    if (!loaded_pi_int) {
+        // Scale pi by 10^digits to get an integer
+        mpf_t scale_f;
+        mpf_init2(scale_f, precision_bits);
+        mpz_t scale_z;
+        mpz_init(scale_z);
+        mpz_ui_pow_ui(scale_z, 10, config.digits);
+        mpf_set_z(scale_f, scale_z);
+        mpf_mul(pi_value, pi_value, scale_f);
+
+        // Extract integer part
+        mpz_set_f(pi_int, pi_value);
+
+        mpf_clear(scale_f);
+        mpz_clear(scale_z);
+
+        // Save pi_int checkpoint
+        if (!pi_int_ckpt.empty()) {
+            FILE* f = fopen(pi_int_ckpt.c_str(), "wb");
+            if (f) {
+                size_t count = 0;
+                void* data = mpz_export(nullptr, &count, -1, 1, -1, 0, pi_int);
+                fwrite(&count, sizeof(size_t), 1, f);
+                if (count > 0 && data) { fwrite(data, 1, count, f); free(data); }
+                fclose(f);
+                if (config.verbose) {
+                    std::cout << "  Saved pi_int checkpoint (" << count << " bytes)" << std::endl;
+                }
+            }
+        }
+    }
 
     // Convert to string using GMP's optimized mpz_get_str
     std::string digits_str = BaseConverter::fast_integer_to_decimal(pi_int);
@@ -170,13 +213,11 @@ PiResult PiEngine::compute(const PiConfig& config) {
 
     // Cleanup
     mpz_clear(numerator_int);
-    mpz_clear(scale_z);
     mpz_clear(pi_int);
     mpf_clear(sqrt_10005);
     mpf_clear(pi_value);
     mpf_clear(num_f);
     mpf_clear(den_f);
-    mpf_clear(scale_f);
 
     return PiResult{result_str, total_time, terms};
 }
