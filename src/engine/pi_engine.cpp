@@ -1,24 +1,16 @@
 /**
  * @file pi_engine.cpp
- * @brief Pi computation orchestrator — pure integer arithmetic.
+ * @brief Pi computation orchestrator — hybrid mpf/mpz approach.
  *
- * Computes floor(pi * 10^N) as a pure integer, eliminating the expensive
- * mpf_get_str decimal conversion (which was 41% of runtime at 100M digits).
- *
- * Formula:
- *   pi = 426880 * sqrt(10005) * Q(0,N) / R(0,N)
- *
- * To get N decimal digits as integer:
- *   pi_digits = floor(426880 * isqrt(10005 * 10^(2*N+guard)) * Q / R / 10^guard)
- *
- * where isqrt(X) = floor(sqrt(X)) via GMP's mpz_sqrt (exact integer operation).
- *
- * The final result is an mpz_t integer that we convert to string with mpz_get_str,
- * which is O(n*log(n)) — much faster than mpf_get_str's O(n^2).
+ * Uses mpf for the final computation (sqrt + divide) because it's faster
+ * than the pure integer approach (avoids computing 10^(2N)).
+ * Then extracts the result as an integer and uses mpz_get_str for
+ * string conversion (faster than mpf_get_str at large scales).
  */
 
 #include "pi_engine.h"
 #include "binary_splitting.h"
+#include "../arithmetic/newton_divider.h"
 #include "../io/base_converter.h"
 #include <chrono>
 #include <iostream>
@@ -39,10 +31,9 @@ PiResult PiEngine::compute(const PiConfig& config) {
     auto total_start = Clock::now();
 
     if (config.verbose) {
-        std::cout << "Computing " << config.digits << " digits of pi (integer mode)..." << std::endl;
+        std::cout << "Computing " << config.digits << " digits of pi..." << std::endl;
     }
 
-    // Guard digits to ensure the last requested digit is correct
     size_t guard_digits = 100;
     size_t precision = config.digits + guard_digits;
 
@@ -66,67 +57,67 @@ PiResult PiEngine::compute(const PiConfig& config) {
                   << bs_time << "s" << std::endl;
     }
 
-    // Step 2: Compute pi as integer
-    // pi_int = floor(426880 * isqrt(10005 * 10^(2*precision)) * Q / R)
+    // Step 2: Final computation using mpf (faster than pure integer for sqrt+divide)
+    // pi = 426880 * sqrt(10005) * Q / R
     auto final_start = Clock::now();
 
-    // Compute 10^(2*precision) — this is the scaling factor for sqrt
-    auto pow_start = Clock::now();
-    mpz_t scale;
-    mpz_init(scale);
-    mpz_ui_pow_ui(scale, 10, 2 * precision);
-    auto pow_end = Clock::now();
+    mp_bitcnt_t precision_bits = static_cast<mp_bitcnt_t>(precision * 3.3219281) + 64;
 
-    // Compute 10005 * 10^(2*precision)
-    mpz_t sqrt_arg;
-    mpz_init(sqrt_arg);
-    mpz_mul_ui(sqrt_arg, scale, 10005);
-
-    // isqrt(10005 * 10^(2*precision)) — this gives sqrt(10005) * 10^precision
+    // Compute sqrt(10005)
     auto sqrt_start = Clock::now();
-    mpz_t sqrt_val;
-    mpz_init(sqrt_val);
-    mpz_sqrt(sqrt_val, sqrt_arg);
+    mpf_t sqrt_10005;
+    mpf_init2(sqrt_10005, precision_bits);
+    NewtonDivider::sqrt_to_precision(sqrt_10005, 10005, precision);
     auto sqrt_end = Clock::now();
     double sqrt_time = Duration(sqrt_end - sqrt_start).count();
 
-    // Compute numerator: 426880 * sqrt_val * Q
-    auto mul_start = Clock::now();
-    mpz_t numerator;
-    mpz_init(numerator);
-    mpz_mul_ui(numerator, sqrt_val, 426880);
-    multiplier_.multiply(numerator, numerator, bsr.Q);
+    // Compute pi as mpf: (426880 * sqrt(10005) * Q) / R
+    auto div_start = Clock::now();
+    mpz_t numerator_int;
+    mpz_init(numerator_int);
+    mpz_mul_ui(numerator_int, bsr.Q, 426880);
 
-    // Compute pi_scaled = numerator / R
-    // This gives pi * 10^precision (approximately)
-    mpz_t pi_scaled;
-    mpz_init(pi_scaled);
-    mpz_tdiv_q(pi_scaled, numerator, bsr.R);
+    mpf_t pi_value, num_f, den_f;
+    mpf_init2(pi_value, precision_bits);
+    mpf_init2(num_f, precision_bits);
+    mpf_init2(den_f, precision_bits);
 
-    // Remove guard digits: pi_int = pi_scaled / 10^guard_digits
-    mpz_t guard_power;
-    mpz_init(guard_power);
-    mpz_ui_pow_ui(guard_power, 10, guard_digits);
-    mpz_t pi_int;
-    mpz_init(pi_int);
-    mpz_tdiv_q(pi_int, pi_scaled, guard_power);
-    auto mul_end = Clock::now();
-    double mul_time = Duration(mul_end - mul_start).count();
+    mpf_set_z(num_f, numerator_int);
+    mpf_set_z(den_f, bsr.R);
 
-    double final_time = Duration(mul_end - final_start).count();
-    double pow_time = Duration(pow_end - pow_start).count();
+    mpf_mul(pi_value, num_f, sqrt_10005);
+    mpf_div(pi_value, pi_value, den_f);
+    auto div_end = Clock::now();
+    double div_time = Duration(div_end - div_start).count();
+
+    double final_time = Duration(div_end - final_start).count();
 
     if (config.verbose) {
         std::cout << "  Final computation: " << std::fixed << std::setprecision(3)
                   << final_time << "s"
-                  << " (10^N: " << pow_time << "s, sqrt: " << sqrt_time
-                  << "s, multiply+divide: " << mul_time << "s)"
+                  << " (sqrt: " << sqrt_time << "s, multiply+divide: " << div_time << "s)"
                   << std::endl;
     }
 
-    // Step 3: Convert integer to string using subquadratic divide-and-conquer
-    // Uses precomputed power-of-10 tree for O(n·log(n)²) conversion
+    // Step 3: Extract as integer and convert to string
+    // Multiply by 10^digits to get integer digits, then use mpz_get_str
     auto conv_start = Clock::now();
+
+    // Scale pi by 10^digits to get an integer
+    mpf_t scale_f;
+    mpf_init2(scale_f, precision_bits);
+    mpz_t scale_z;
+    mpz_init(scale_z);
+    mpz_ui_pow_ui(scale_z, 10, config.digits);
+    mpf_set_z(scale_f, scale_z);
+    mpf_mul(pi_value, pi_value, scale_f);
+
+    // Extract integer part
+    mpz_t pi_int;
+    mpz_init(pi_int);
+    mpz_set_f(pi_int, pi_value);
+
+    // Convert to string using GMP's optimized mpz_get_str
     std::string digits_str = BaseConverter::fast_integer_to_decimal(pi_int);
 
     // Format: insert "." after first digit
@@ -138,7 +129,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
         result_str = digits_str;
     }
 
-    // Trim to requested number of digits after decimal point
+    // Trim to requested digits
     size_t dot_pos = result_str.find('.');
     if (dot_pos != std::string::npos) {
         size_t target_len = dot_pos + 1 + config.digits;
@@ -151,7 +142,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
     double conv_time = Duration(conv_end - conv_start).count();
 
     if (config.verbose) {
-        std::cout << "  Integer to string: " << std::fixed << std::setprecision(3)
+        std::cout << "  String conversion: " << std::fixed << std::setprecision(3)
                   << conv_time << "s" << std::endl;
     }
 
@@ -167,18 +158,19 @@ PiResult PiEngine::compute(const PiConfig& config) {
                   << std::setw(5) << std::setprecision(1) << (bs_time / total_time * 100) << "%)" << std::endl;
         std::cout << "    Final computation:  " << std::setw(8) << std::setprecision(3) << final_time << "s ("
                   << std::setw(5) << std::setprecision(1) << (final_time / total_time * 100) << "%)" << std::endl;
-        std::cout << "    Integer to string:  " << std::setw(8) << std::setprecision(3) << conv_time << "s ("
+        std::cout << "    String conversion:  " << std::setw(8) << std::setprecision(3) << conv_time << "s ("
                   << std::setw(5) << std::setprecision(1) << (conv_time / total_time * 100) << "%)" << std::endl;
     }
 
     // Cleanup
-    mpz_clear(scale);
-    mpz_clear(sqrt_arg);
-    mpz_clear(sqrt_val);
-    mpz_clear(numerator);
-    mpz_clear(pi_scaled);
-    mpz_clear(guard_power);
+    mpz_clear(numerator_int);
+    mpz_clear(scale_z);
     mpz_clear(pi_int);
+    mpf_clear(sqrt_10005);
+    mpf_clear(pi_value);
+    mpf_clear(num_f);
+    mpf_clear(den_f);
+    mpf_clear(scale_f);
 
     return PiResult{result_str, total_time, terms};
 }
