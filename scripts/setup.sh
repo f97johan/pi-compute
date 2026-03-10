@@ -197,7 +197,14 @@ echo ""
 # Run tests
 echo "Running tests..."
 cd "$BUILD_DIR"
-ctest --output-on-failure
+if command -v ctest &>/dev/null; then
+    ctest --output-on-failure
+elif command -v ctest3 &>/dev/null; then
+    ctest3 --output-on-failure
+else
+    # Fallback: run test binary directly
+    ./tests/pi_tests
+fi
 
 echo ""
 echo "============================================"
