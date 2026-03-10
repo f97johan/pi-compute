@@ -22,6 +22,8 @@ struct PiConfig {
     size_t digits = 1000;                     ///< Number of decimal digits to compute
     std::string output_file = "pi_digits.txt"; ///< Output file path
     bool verbose = false;                      ///< Print progress messages
+    std::string checkpoint_dir;                ///< Checkpoint directory (empty = disabled)
+    bool resume = false;                       ///< Try to resume from checkpoint
 };
 
 /**

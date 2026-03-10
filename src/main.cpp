@@ -31,6 +31,8 @@ OPTIONS:
     --gpus <N>          Number of GPUs to use (0 = auto-detect all, default: 0)
     --gpu-threshold <N> Min GMP limbs for GPU path (default: 10000)
     --output <FILE>     Output file path (default: pi_digits.txt)
+    --checkpoint <DIR>  Enable checkpointing to directory (for crash recovery)
+    --resume            Resume from checkpoint (requires --checkpoint)
     --verbose           Verbose progress output
     --help              Show this help message
 
@@ -69,6 +71,10 @@ int main(int argc, char* argv[]) {
             use_gpu = true;
         } else if (arg == "--gpu-threshold" && i + 1 < argc) {
             gpu_threshold = std::stoul(argv[++i]);
+        } else if (arg == "--checkpoint" && i + 1 < argc) {
+            config.checkpoint_dir = argv[++i];
+        } else if (arg == "--resume") {
+            config.resume = true;
         } else if (arg == "--verbose" || arg == "-v") {
             config.verbose = true;
         } else {

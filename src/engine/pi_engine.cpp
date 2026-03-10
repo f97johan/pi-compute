@@ -45,6 +45,12 @@ PiResult PiEngine::compute(const PiConfig& config) {
 
     auto bs_start = Clock::now();
     BinarySplitting bs(multiplier_);
+    if (!config.checkpoint_dir.empty()) {
+        bs.enable_checkpointing(config.checkpoint_dir);
+        if (config.verbose) {
+            std::cout << "  Checkpointing: " << config.checkpoint_dir << std::endl;
+        }
+    }
     if (config.verbose) {
         std::cout << "  Threads: " << bs.thread_count() << std::endl;
     }
