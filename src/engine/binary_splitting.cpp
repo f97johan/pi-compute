@@ -10,6 +10,7 @@
 #include "binary_splitting.h"
 #include <cmath>
 #include <cassert>
+#include <vector>
 #include <future>
 #include <algorithm>
 #include <fstream>
