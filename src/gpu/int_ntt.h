@@ -33,11 +33,11 @@ struct NttPrime {
     int max_log2;    // Maximum NTT size = 2^max_log2
 };
 
-// Our three primes
+// Our three primes (all support NTT size up to 2^23 = 8388608)
 static constexpr NttPrime NTT_PRIMES[] = {
-    {998244353ULL,  3ULL, 23},   // 2^23 × 119 + 1
-    {985661441ULL,  3ULL, 23},   // 2^23 × 117 + 2 + 1... actually 2^23 * 117 + 1 + 2... let me use known good ones
-    {754974721ULL, 11ULL, 24},   // 2^24 × 45 + 1
+    {998244353ULL,  3ULL, 23},   // 119 × 2^23 + 1, primitive root 3
+    {897581057ULL,  3ULL, 23},   // 107 × 2^23 + 1, primitive root 3
+    {754974721ULL, 11ULL, 24},   //  45 × 2^24 + 1, primitive root 11
 };
 static constexpr int NUM_PRIMES = 3;
 
