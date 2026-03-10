@@ -166,8 +166,9 @@ PiResult PiEngine::compute(const PiConfig& config) {
         }
     }
 
-    // Convert to string using GMP's optimized mpz_get_str
-    std::string digits_str = BaseConverter::fast_integer_to_decimal(pi_int);
+    // Convert to string using parallel divide-and-conquer
+    // (precomputed power-of-10 tree + multi-threaded)
+    std::string digits_str = BaseConverter::parallel_to_decimal(pi_int);
 
     // Format: insert "." after first digit
     // pi_int should be like 314159265... (config.digits+1 digits total)
