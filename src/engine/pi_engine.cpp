@@ -13,6 +13,14 @@
 #include "../arithmetic/newton_divider.h"
 #include "../io/base_converter.h"
 #include <chrono>
+#include <fstream>
+
+#ifdef __linux__
+#include <unistd.h>
+#endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#endif
 #include <iostream>
 #include <iomanip>
 #include <cstdlib>
@@ -26,6 +34,31 @@ using Duration = std::chrono::duration<double>;
 
 PiEngine::PiEngine(Multiplier& multiplier)
     : multiplier_(multiplier) {}
+
+size_t PiEngine::get_rss_mb() {
+#ifdef __linux__
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        if (line.substr(0, 6) == "VmRSS:") {
+            // Format: "VmRSS:    12345 kB"
+            size_t kb = 0;
+            sscanf(line.c_str(), "VmRSS: %zu", &kb);
+            return kb / 1024;
+        }
+    }
+    return 0;
+#elif defined(__APPLE__)
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
+        return info.resident_size / (1024 * 1024);
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
 
 PiResult PiEngine::compute(const PiConfig& config) {
     auto total_start = Clock::now();
@@ -44,7 +77,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
     }
 
     auto bs_start = Clock::now();
-    BinarySplitting bs(multiplier_);
+    BinarySplitting bs(multiplier_, config.num_threads);
     if (!config.checkpoint_dir.empty()) {
         bs.enable_checkpointing(config.checkpoint_dir);
         if (config.verbose) {
@@ -52,7 +85,8 @@ PiResult PiEngine::compute(const PiConfig& config) {
         }
     }
     if (config.verbose) {
-        std::cout << "  Threads: " << bs.thread_count() << std::endl;
+        std::cout << "  Threads: " << bs.thread_count()
+                  << " | RSS: " << get_rss_mb() << " MB" << std::endl;
     }
     BSResult bsr = bs.compute(0, terms);
     auto bs_end = Clock::now();
@@ -60,7 +94,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
 
     if (config.verbose) {
         std::cout << "  Binary splitting: " << std::fixed << std::setprecision(3)
-                  << bs_time << "s" << std::endl;
+                  << bs_time << "s | RSS: " << get_rss_mb() << " MB" << std::endl;
     }
 
     // Step 2: Final computation using mpf (faster than pure integer for sqrt+divide)
@@ -102,7 +136,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
         std::cout << "  Final computation: " << std::fixed << std::setprecision(3)
                   << final_time << "s"
                   << " (sqrt: " << sqrt_time << "s, multiply+divide: " << div_time << "s)"
-                  << std::endl;
+                  << " | RSS: " << get_rss_mb() << " MB" << std::endl;
     }
 
     // Step 3: Extract as integer and convert to string
@@ -228,7 +262,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
 
     if (config.verbose) {
         std::cout << "  String conversion: " << std::fixed << std::setprecision(3)
-                  << conv_time << "s" << std::endl;
+                  << conv_time << "s | RSS: " << get_rss_mb() << " MB" << std::endl;
     }
 
     auto total_end = Clock::now();
