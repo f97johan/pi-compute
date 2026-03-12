@@ -179,17 +179,34 @@ EOF
 
 cleanup() {
     log "Cleaning up..."
-    if [ ${#INSTANCE_IDS[@]} -eq 0 ]; then
-        return
-    fi
-    for i in $(seq 0 $((${#INSTANCE_IDS[@]} - 1))); do
-        iid="${INSTANCE_IDS[$i]}"
-        label="${LABELS[$i]}"
-        if [ -n "$iid" ] && [ "$iid" != "i-dryrun" ]; then
-            log "  Terminating $label: $iid"
-            aws ec2 terminate-instances --region "$REGION" --instance-ids "$iid" --output text 2>/dev/null || true
+    # Terminate instances
+    if [ ${#INSTANCE_IDS[@]} -gt 0 ]; then
+        for i in $(seq 0 $((${#INSTANCE_IDS[@]} - 1))); do
+            iid="${INSTANCE_IDS[$i]}"
+            label="${LABELS[$i]}"
+            if [ -n "$iid" ] && [ "$iid" != "i-dryrun" ]; then
+                log "  Terminating $label: $iid"
+                aws ec2 terminate-instances --region "$REGION" --instance-ids "$iid" --output text 2>/dev/null || true
+            fi
+        done
+        # Wait briefly for instances to start terminating before deleting SG
+        if [ -n "$CREATED_SG" ]; then
+            log "  Waiting for instances to terminate before deleting security group..."
+            sleep 10
         fi
-    done
+    fi
+    # Delete auto-created security group
+    if [ -n "$CREATED_SG" ]; then
+        log "  Deleting security group: $CREATED_SG"
+        # May need retries — instances must be fully terminated first
+        for attempt in 1 2 3 4 5; do
+            if aws ec2 delete-security-group --region "$REGION" --group-id "$CREATED_SG" 2>/dev/null; then
+                log "  Security group deleted."
+                break
+            fi
+            sleep 15
+        done
+    fi
 }
 trap cleanup EXIT
 
@@ -202,6 +219,38 @@ log "Digits: $DIGITS"
 log "Region: $REGION"
 log "Architectures: ${CONFIGS[*]}"
 log ""
+
+# Step 0: Ensure security group with SSH access
+CREATED_SG=""
+if [ "$DRY_RUN" = "false" ] && [ -z "$SECURITY_GROUP" ]; then
+    SG_NAME="pi-bench-ssh-$$"
+    log "Creating security group: $SG_NAME (SSH from 0.0.0.0/0)..."
+
+    # Get default VPC
+    VPC_ID=$(aws ec2 describe-vpcs --region "$REGION" \
+        --filters "Name=isDefault,Values=true" \
+        --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
+
+    if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
+        SECURITY_GROUP=$(aws ec2 create-security-group \
+            --region "$REGION" \
+            --group-name "$SG_NAME" \
+            --description "Pi benchmark SSH access (auto-created, safe to delete)" \
+            --vpc-id "$VPC_ID" \
+            --query 'GroupId' --output text)
+
+        aws ec2 authorize-security-group-ingress \
+            --region "$REGION" \
+            --group-id "$SECURITY_GROUP" \
+            --protocol tcp --port 22 --cidr 0.0.0.0/0 \
+            --output text >/dev/null
+
+        CREATED_SG="$SECURITY_GROUP"
+        log "  Security group: $SECURITY_GROUP (VPC: $VPC_ID)"
+    else
+        log "  WARNING: No default VPC found. SSH may not work without --sg."
+    fi
+fi
 
 # Step 1: Launch instances
 log "Launching instances..."
