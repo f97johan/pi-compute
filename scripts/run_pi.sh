@@ -96,7 +96,6 @@ done
 missing=""
 [ -z "$DIGITS" ] && missing="$missing --digits"
 [ -z "$INSTANCE_TYPE" ] && missing="$missing --instance-type"
-[ -z "$S3_BUCKET" ] && missing="$missing --s3-bucket"
 if [ "$DRY_RUN" = "false" ]; then
     [ -z "$KEY_NAME" ] && missing="$missing --key-name"
     [ -z "$KEY_FILE" ] && missing="$missing --key-file"
@@ -187,28 +186,7 @@ date -u
 echo "=== Computation complete ==="
 date -u
 
-# Upload results to S3
-S3_PATH="s3://${S3_BUCKET}/${S3_PREFIX}/${DIGITS}"
-
-echo "Uploading output to \${S3_PATH}/ ..."
-
-# Upload the pi digits file
-aws s3 cp /home/ubuntu/output/pi_${DIGITS}.txt "\${S3_PATH}/pi_${DIGITS}.txt" \\
-    --no-progress || echo "WARNING: Failed to upload pi digits file"
-
-# Upload the compute log
-aws s3 cp /home/ubuntu/output/compute.log "\${S3_PATH}/compute.log" \\
-    --no-progress || echo "WARNING: Failed to upload compute log"
-
-# Upload the full system log
-aws s3 cp /var/log/pi-compute.log "\${S3_PATH}/system.log" \\
-    --no-progress || echo "WARNING: Failed to upload system log"
-
-# Upload checkpoints (for potential resume)
-aws s3 sync /home/ubuntu/ckpt/ "\${S3_PATH}/checkpoints/" \\
-    --no-progress || echo "WARNING: Failed to upload checkpoints"
-
-# Upload system info
+# Save system info
 {
     echo "Instance type: ${INSTANCE_TYPE}"
     echo "Architecture: \$(uname -m)"
@@ -220,11 +198,32 @@ aws s3 sync /home/ubuntu/ckpt/ "\${S3_PATH}/checkpoints/" \\
     echo "Digits: ${DIGITS}"
     echo "Completed: \$(date -u)"
 } > /home/ubuntu/output/system_info.txt
-aws s3 cp /home/ubuntu/output/system_info.txt "\${S3_PATH}/system_info.txt" \\
-    --no-progress || echo "WARNING: Failed to upload system info"
 
-echo "=== Upload complete ==="
-echo "Results at: \${S3_PATH}/"
+# Upload results to S3 (if bucket specified)
+if [ -n "${S3_BUCKET}" ]; then
+    S3_PATH="s3://${S3_BUCKET}/${S3_PREFIX}/${DIGITS}"
+    echo "Uploading output to \${S3_PATH}/ ..."
+
+    aws s3 cp /home/ubuntu/output/pi_${DIGITS}.txt "\${S3_PATH}/pi_${DIGITS}.txt" \\
+        --no-progress || echo "WARNING: Failed to upload pi digits file"
+    aws s3 cp /home/ubuntu/output/compute.log "\${S3_PATH}/compute.log" \\
+        --no-progress || echo "WARNING: Failed to upload compute log"
+    aws s3 cp /var/log/pi-compute.log "\${S3_PATH}/system.log" \\
+        --no-progress || echo "WARNING: Failed to upload system log"
+    aws s3 cp /home/ubuntu/output/system_info.txt "\${S3_PATH}/system_info.txt" \\
+        --no-progress || echo "WARNING: Failed to upload system info"
+    aws s3 sync /home/ubuntu/ckpt/ "\${S3_PATH}/checkpoints/" \\
+        --no-progress || echo "WARNING: Failed to upload checkpoints"
+
+    echo "=== Upload complete ==="
+    echo "Results at: \${S3_PATH}/"
+else
+    echo "=== No S3 bucket specified — results on local disk ==="
+    echo "Output: /home/ubuntu/output/pi_${DIGITS}.txt"
+    echo "Log:    /home/ubuntu/output/compute.log"
+    echo "Info:   /home/ubuntu/output/system_info.txt"
+    echo "Ckpts:  /home/ubuntu/ckpt/"
+fi
 date -u
 
 # Signal completion
@@ -237,20 +236,24 @@ USERDATA
 # ============================================================
 
 AMI_ARCH=$(get_ami_arch "$INSTANCE_TYPE")
-S3_PATH="s3://${S3_BUCKET}/${S3_PREFIX}/${DIGITS}"
+if [ -n "$S3_BUCKET" ]; then
+    S3_DISPLAY="s3://${S3_BUCKET}/${S3_PREFIX}/${DIGITS}/"
+else
+    S3_DISPLAY="(none — output stays on EBS volume)"
+fi
 
 log "Pi Computation Launcher"
 log "  Digits:    $DIGITS"
 log "  Instance:  $INSTANCE_TYPE ($AMI_ARCH)"
 log "  Disk:      ${DISK_GB} GB gp3"
-log "  S3 output: $S3_PATH/"
+log "  S3 output: $S3_DISPLAY"
 log "  Region:    $REGION"
 log ""
 
 if [ "$DRY_RUN" = "true" ]; then
     log "=== DRY RUN ==="
     log "Would launch $INSTANCE_TYPE with ${DISK_GB}GB disk"
-    log "Output would go to $S3_PATH/"
+    log "Output: $S3_DISPLAY"
     log ""
     log "User data script:"
     log "---"
@@ -353,8 +356,15 @@ log ""
 log "  Check if done:"
 log "    ssh -i $KEY_FILE ubuntu@$PUBLIC_IP 'test -f /home/ubuntu/computation_done && echo DONE || echo RUNNING'"
 log ""
-log "  Results will be uploaded to:"
-log "    $S3_PATH/"
+if [ -n "$S3_BUCKET" ]; then
+    log "  Results will be uploaded to:"
+    log "    s3://${S3_BUCKET}/${S3_PREFIX}/${DIGITS}/"
+else
+    log "  Results will be on the instance at:"
+    log "    /home/ubuntu/output/pi_${DIGITS}.txt"
+    log "    /home/ubuntu/output/compute.log"
+    log "    /home/ubuntu/ckpt/"
+fi
 log ""
 log "  When finished, terminate manually:"
 log "    aws ec2 terminate-instances --region $REGION --instance-ids $INSTANCE_ID"
