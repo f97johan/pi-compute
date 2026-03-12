@@ -364,23 +364,37 @@ BSResult BinarySplitting::compute(unsigned long a, unsigned long b) {
         // Cap parallel depth for large computations to limit peak memory.
         // Each parallel level doubles the number of concurrent BSResult triples
         // (P, Q, R) alive simultaneously. For multi-billion digit computations,
-        // the top-level numbers are multi-GB each, so having 16 concurrent
-        // branches (depth=4) can easily exceed available RAM.
+        // the top-level numbers are multi-GB each.
         //
-        // depth=2 → 4 concurrent branches: good balance of parallelism vs memory
-        // depth=3 → 8 concurrent branches: ok for moderate sizes
-        // depth=4+ → 16+ branches: only safe for <1B digits
+        // Memory model: at depth D, we have 2^D concurrent branches.
+        // Each branch's merge needs ~8.3 * (N / 2^D) bytes at peak.
+        // But 2^D branches are alive simultaneously, so total peak is
+        // roughly ~8.3 * N bytes regardless of depth (the work just shifts).
         //
-        // The parallelism loss is minimal because:
-        // 1. Top-level merges are memory-bound (GMP FFT), not CPU-bound
-        // 2. GMP internally uses threads for large multiplications
-        // 3. The sequential top levels still parallelize their merges
+        // The REAL issue is that at depth D, the level-(D-1) merge has
+        // 2 concurrent merges of (N/2)-digit numbers, each needing scratch.
+        // With depth=2: 2 concurrent merges at level 1, each with N/4 numbers,
+        // PLUS the 4 branch results alive = ~12 * (N/4) * 0.415 bytes.
+        //
+        // Empirically:
+        // - depth=1 (2 branches): fits in ~10 * N * 0.415 bytes
+        //   5B digits → ~21 GB peak → fits in 64 GB ✓
+        // - depth=2 (4 branches): needs ~14 * N * 0.415 bytes
+        //   5B digits → ~29 GB peak, but with scratch → ~60 GB → OOM on 64 GB ✗
+        //
+        // The parallelism loss from depth=1 is compensated by:
+        // 1. Semi-parallel merge (2 concurrent muls) at every level
+        // 2. Parallel subtrees at the bottom (<10K terms)
+        // 3. compute_sequential still calls merge_parallel for each merge
         unsigned long range = b - a;
-        if (range > 200000000 && max_depth > 2) {
-            // >~3B digits: cap at depth 2 (4 branches)
+        if (range > 100000000 && max_depth > 1) {
+            // >~1.4B digits: cap at depth 1 (2 branches)
+            max_depth = 1;
+        } else if (range > 50000000 && max_depth > 2) {
+            // >~700M digits: cap at depth 2 (4 branches)
             max_depth = 2;
-        } else if (range > 50000000 && max_depth > 3) {
-            // >~700M digits: cap at depth 3 (8 branches)
+        } else if (range > 10000000 && max_depth > 3) {
+            // >~140M digits: cap at depth 3 (8 branches)
             max_depth = 3;
         }
 
