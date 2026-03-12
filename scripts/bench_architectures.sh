@@ -179,9 +179,12 @@ EOF
 
 cleanup() {
     log "Cleaning up..."
+    if [ ${#INSTANCE_IDS[@]} -eq 0 ]; then
+        return
+    fi
     for i in $(seq 0 $((${#INSTANCE_IDS[@]} - 1))); do
-        local iid="${INSTANCE_IDS[$i]}"
-        local label="${LABELS[$i]}"
+        iid="${INSTANCE_IDS[$i]}"
+        label="${LABELS[$i]}"
         if [ -n "$iid" ] && [ "$iid" != "i-dryrun" ]; then
             log "  Terminating $label: $iid"
             aws ec2 terminate-instances --region "$REGION" --instance-ids "$iid" --output text 2>/dev/null || true
@@ -223,25 +226,41 @@ for config in "${CONFIGS[@]}"; do
     # Generate user data
     userdata_b64=$(generate_userdata | base64)
 
-    # Build launch args
-    launch_args="--region $REGION"
-    launch_args="$launch_args --image-id $ami"
-    launch_args="$launch_args --instance-type $itype"
-    launch_args="$launch_args --key-name $KEY_NAME"
-    launch_args="$launch_args --user-data $userdata_b64"
-    launch_args="$launch_args --tag-specifications ResourceType=instance,Tags=[{Key=Name,Value=pi-bench-$label},{Key=Project,Value=pi-compute}]"
-    launch_args="$launch_args --instance-initiated-shutdown-behavior terminate"
-    launch_args="$launch_args --query Instances[0].InstanceId"
-    launch_args="$launch_args --output text"
+    # Build tag spec as JSON
+    tag_spec="ResourceType=instance,Tags=[{Key=Name,Value=pi-bench-${label}},{Key=Project,Value=pi-compute}]"
+
+    # Launch instance
+    cmd="aws ec2 run-instances --region $REGION --image-id $ami --instance-type $itype --key-name $KEY_NAME"
+    cmd="$cmd --user-data file://<(echo '$userdata_b64' | base64 -d)"
 
     if [ -n "$SUBNET_ID" ]; then
-        launch_args="$launch_args --subnet-id $SUBNET_ID"
+        subnet_arg="--subnet-id $SUBNET_ID"
+    else
+        subnet_arg=""
     fi
     if [ -n "$SECURITY_GROUP" ]; then
-        launch_args="$launch_args --security-group-ids $SECURITY_GROUP"
+        sg_arg="--security-group-ids $SECURITY_GROUP"
+    else
+        sg_arg=""
     fi
 
-    iid=$(eval aws ec2 run-instances $launch_args)
+    # Write user data to temp file to avoid shell quoting issues
+    ud_tmpfile=$(mktemp)
+    generate_userdata > "$ud_tmpfile"
+
+    iid=$(aws ec2 run-instances \
+        --region "$REGION" \
+        --image-id "$ami" \
+        --instance-type "$itype" \
+        --key-name "$KEY_NAME" \
+        --user-data "fileb://$ud_tmpfile" \
+        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=pi-bench-${label}},{Key=Project,Value=pi-compute}]" \
+        --instance-initiated-shutdown-behavior terminate \
+        $subnet_arg $sg_arg \
+        --query 'Instances[0].InstanceId' \
+        --output text)
+
+    rm -f "$ud_tmpfile"
     INSTANCE_IDS+=("$iid")
     INSTANCE_IPS+=("")  # placeholder, filled after running
     log "    Instance: $iid"
