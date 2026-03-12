@@ -25,7 +25,7 @@ DIGITS=100000000          # 100M digits by default (~1-3 min per arch)
 DRY_RUN=false
 KEY_NAME=""
 KEY_FILE=""
-REGION="us-east-1"
+REGION="us-west-2"
 SUBNET_ID=""
 SECURITY_GROUP=""
 GITHUB_REPO="https://github.com/f97johan/pi-compute.git"
@@ -61,7 +61,7 @@ while [ $# -gt 0 ]; do
             echo "  --dry-run        Print commands without executing"
             echo "  --key-name KEY   EC2 key pair name (as it appears in AWS)"
             echo "  --key-file PATH  Path to the .pem private key file for SSH"
-            echo "  --region REGION  AWS region (default: us-east-1)"
+            echo "  --region REGION  AWS region (default: us-west-2)"
             echo "  --subnet-id ID   Subnet ID (optional, uses default VPC)"
             echo "  --sg SG_ID       Security group ID (optional)"
             echo "  --repo URL       Git repo URL"
