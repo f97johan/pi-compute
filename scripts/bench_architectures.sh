@@ -24,6 +24,7 @@ set -eo pipefail
 DIGITS=100000000          # 100M digits by default (~1-3 min per arch)
 DRY_RUN=false
 KEY_NAME=""
+KEY_FILE=""
 REGION="us-east-1"
 SUBNET_ID=""
 SECURITY_GROUP=""
@@ -47,31 +48,53 @@ while [ $# -gt 0 ]; do
         --digits)      DIGITS="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --key-name)    KEY_NAME="$2"; shift 2 ;;
+        --key-file)    KEY_FILE="$2"; shift 2 ;;
         --region)      REGION="$2"; shift 2 ;;
         --subnet-id)   SUBNET_ID="$2"; shift 2 ;;
         --sg)          SECURITY_GROUP="$2"; shift 2 ;;
         --repo)        GITHUB_REPO="$2"; shift 2 ;;
         --help|-h)
-            echo "Usage: $0 [--digits N] [--dry-run] [--key-name KEY] [--region REGION]"
+            echo "Usage: $0 [--digits N] [--dry-run] [--key-name KEY] [--key-file PATH] [--region REGION]"
             echo ""
             echo "Options:"
             echo "  --digits N       Number of pi digits to compute (default: 100000000)"
             echo "  --dry-run        Print commands without executing"
-            echo "  --key-name KEY   EC2 key pair name (required unless --dry-run)"
+            echo "  --key-name KEY   EC2 key pair name (as it appears in AWS)"
+            echo "  --key-file PATH  Path to the .pem private key file for SSH"
             echo "  --region REGION  AWS region (default: us-east-1)"
             echo "  --subnet-id ID   Subnet ID (optional, uses default VPC)"
             echo "  --sg SG_ID       Security group ID (optional)"
             echo "  --repo URL       Git repo URL"
+            echo ""
+            echo "Both --key-name and --key-file are required unless --dry-run."
+            echo "  --key-name is the name in AWS (used for ec2 run-instances)"
+            echo "  --key-file is the local .pem file path (used for SSH/SCP)"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-if [ "$DRY_RUN" = "false" ] && [ -z "$KEY_NAME" ]; then
-    echo "ERROR: --key-name is required (unless --dry-run)"
-    echo "Create one with: aws ec2 create-key-pair --key-name pi-bench --query 'KeyMaterial' --output text > pi-bench.pem"
-    exit 1
+if [ "$DRY_RUN" = "false" ]; then
+    if [ -z "$KEY_NAME" ] || [ -z "$KEY_FILE" ]; then
+        echo "ERROR: Both --key-name and --key-file are required (unless --dry-run)"
+        echo ""
+        echo "  --key-name  The EC2 key pair name (as shown in AWS Console)"
+        echo "  --key-file  Path to the corresponding .pem private key file"
+        echo ""
+        echo "Example:"
+        echo "  # Create a new key pair:"
+        echo "  aws ec2 create-key-pair --key-name pi-bench --query 'KeyMaterial' --output text > ~/.ssh/pi-bench.pem"
+        echo "  chmod 400 ~/.ssh/pi-bench.pem"
+        echo ""
+        echo "  # Run the benchmark:"
+        echo "  $0 --key-name pi-bench --key-file ~/.ssh/pi-bench.pem"
+        exit 1
+    fi
+    if [ ! -f "$KEY_FILE" ]; then
+        echo "ERROR: Key file not found: $KEY_FILE"
+        exit 1
+    fi
 fi
 
 mkdir -p "$RESULTS_DIR"
@@ -246,7 +269,7 @@ if [ "$DRY_RUN" = "false" ]; then
     log "Waiting for benchmarks to complete (5-30 minutes)..."
     log "Monitor with:"
     for i in $(seq 0 $((${#INSTANCE_IPS[@]} - 1))); do
-        log "  ssh -i ${KEY_NAME}.pem ubuntu@${INSTANCE_IPS[$i]} 'tail -f /var/log/pi-benchmark.log'"
+        log "  ssh -i ${KEY_FILE} ubuntu@${INSTANCE_IPS[$i]} 'tail -f /var/log/pi-benchmark.log'"
     done
     log ""
 
@@ -263,7 +286,7 @@ if [ "$DRY_RUN" = "false" ]; then
             if [ "${done_flags[$i]}" = "0" ]; then
                 ip="${INSTANCE_IPS[$i]}"
                 if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
-                       -i "${KEY_NAME}.pem" "ubuntu@${ip}" \
+                       -i "${KEY_FILE}" "ubuntu@${ip}" \
                        "test -f /home/ubuntu/benchmark_done" 2>/dev/null; then
                     log "  ✓ ${LABELS[$i]} complete!"
                     done_flags[$i]=1
@@ -286,7 +309,7 @@ if [ "$DRY_RUN" = "false" ]; then
         label="${LABELS[$i]}"
         outfile="$RESULTS_DIR/bench_${label}_$(date +%Y%m%d_%H%M%S).txt"
         scp -o StrictHostKeyChecking=no -o BatchMode=yes \
-            -i "${KEY_NAME}.pem" \
+            -i "${KEY_FILE}" \
             "ubuntu@${ip}:/var/log/pi-benchmark.log" "$outfile" 2>/dev/null || true
         log "  $label → $outfile"
     done
