@@ -110,6 +110,16 @@ void BinarySplitting::save_checkpoint(unsigned long a, unsigned long b, const BS
     if (!checkpointing_enabled_) return;
     std::string path = ckpt_path(checkpoint_dir_, a, b);
     save_bs_result(path, result);
+
+    // Delete child checkpoints — they're redundant now that the parent is saved.
+    // This prevents checkpoint files from accumulating and filling the disk.
+    unsigned long m = a + (b - a) / 2;
+    if (b - a > 1) {
+        std::string left_path = ckpt_path(checkpoint_dir_, a, m);
+        std::string right_path = ckpt_path(checkpoint_dir_, m, b);
+        remove(left_path.c_str());
+        remove(right_path.c_str());
+    }
 }
 
 BSResult BinarySplitting::base_case(unsigned long a) {
@@ -281,8 +291,10 @@ BSResult BinarySplitting::compute_sequential(unsigned long a, unsigned long b) {
 
     BSResult result = merge_parallel(left, right);
 
-    // Save checkpoint if range is large enough (avoid tiny checkpoints)
-    if (checkpointing_enabled_ && (b - a) >= 1000) {
+    // Save checkpoint if range is large enough to be worth the I/O cost.
+    // For 50B digits (~3.5B terms), ranges <100K terms are cheap to recompute
+    // but their checkpoint files accumulate and can fill the disk.
+    if (checkpointing_enabled_ && (b - a) >= 100000) {
         static std::atomic<int64_t> last_ckpt_time{0};
         auto now = std::chrono::steady_clock::now().time_since_epoch();
         int64_t now_sec = std::chrono::duration_cast<std::chrono::seconds>(now).count();
@@ -328,7 +340,7 @@ BSResult BinarySplitting::compute_parallel(unsigned long a, unsigned long b, int
     }
 
     // Save checkpoint for large ranges, time-based
-    if (checkpointing_enabled_ && (b - a) >= 1000) {
+    if (checkpointing_enabled_ && (b - a) >= 100000) {
         static std::atomic<int64_t> last_ckpt_time_p{0};
         auto now = std::chrono::steady_clock::now().time_since_epoch();
         int64_t now_sec = std::chrono::duration_cast<std::chrono::seconds>(now).count();

@@ -9,6 +9,10 @@
 - [x] Phase 2: GPU code written and pushed
 - [x] RSS memory tracking + --threads CLI flag (commit 103e3d8)
 - [x] Memory optimization for 5B+ digit OOM (commit 117af36)
+- [x] Core utilization: 3-tier merge + parallel subtrees (commit b7f648d)
+- [x] Cross-architecture benchmark script: Intel/AMD/Graviton3/Graviton4 (commit 5ddaff9)
+- [x] OOM fix: parallel depth=1 for >1.4B digits (commit 9d2347c)
+- [x] Production run script: run_pi.sh with S3 output (commit 66b53f6)
   - [x] NttEngine wrapping cuFFT
   - [x] Pointwise multiply CUDA kernel
   - [x] Carry propagation

@@ -38,7 +38,7 @@ KEY_FILE=""
 S3_BUCKET=""
 S3_PREFIX="pi-compute"
 REGION="us-west-2"
-DISK_GB=200
+DISK_GB=500
 IAM_PROFILE=""
 SUBNET_ID=""
 SECURITY_GROUP=""
@@ -77,7 +77,7 @@ while [ $# -gt 0 ]; do
             echo "Optional:"
             echo "  --s3-prefix PREFIX    S3 key prefix (default: pi-compute)"
             echo "  --region REGION       AWS region (default: us-west-2)"
-            echo "  --disk-gb N           EBS volume size in GB (default: 200)"
+            echo "  --disk-gb N           EBS volume size in GB (default: 500)"
             echo "  --iam-profile NAME    IAM instance profile for S3 access"
             echo "  --subnet-id ID        Subnet ID"
             echo "  --sg SG_ID            Security group ID"

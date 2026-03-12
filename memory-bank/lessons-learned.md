@@ -47,3 +47,7 @@
 - **Free inputs in merge order**: In sequential merge, order multiplications to free each input as soon as its last use completes. This progressively reduces live memory from 6 inputs to 4, then 2, then 0 during the merge.
 
 - **Free BSResult fields in pi_engine immediately**: P is unused in the final formula (pi = 426880 * sqrt(10005) * Q / R). Free it right after binary splitting. Free Q after multiplying by 426880. Free R after converting to mpf. This saves ~3x the top-level number size before the expensive final computation.
+
+- **Depth=2 still OOMs for 5B digits on 64 GB**: With 4 concurrent branches (depth=2), the level-1 merges run in parallel, each with ~1.25B digit numbers. Two concurrent merges × (6 inputs + scratch) exceeded 60 GB. Depth=1 (2 branches) reduces peak to ~21 GB for 5B digits. The key insight: it's not just the top-level merge that matters — the level below also runs concurrently and its memory adds up.
+
+- **GMP FFT scratch is the hidden memory killer**: GMP's FFT multiplication of two N-byte numbers allocates ~8N bytes of scratch internally. This is invisible to our code but dominates peak RSS. Two concurrent multiplications of 2 GB numbers = 32 GB of scratch alone.
