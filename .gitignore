@@ -30,3 +30,4 @@ pi_digits.txt
 __pycache__/
 *.pyc
 .venv/
+.venv/

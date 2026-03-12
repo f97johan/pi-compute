@@ -16,6 +16,7 @@
 - [x] Checkpoint disk fix: delete children + raise threshold (commit b79c9b3)
 - [x] Out-of-core binary splitting: --out-of-core flag (commit db6f529)
 - [x] FLINT multi-threaded multiplication: --flint flag (commit 58a5bb1)
+- [x] Integer-only math mode: --integer-math flag (commit 7d4d9a3)
   - [x] NttEngine wrapping cuFFT
   - [x] Pointwise multiply CUDA kernel
   - [x] Carry propagation
