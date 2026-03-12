@@ -3,11 +3,12 @@
 ## Current State
 Project is mature with CPU-only being the optimal path. GPU acceleration implemented but not beneficial due to per-call overhead exceeding GMP's optimized CPU FFT.
 
-## Latest Changes (2026-03-11)
-- Added RSS memory tracking (`get_rss_mb()`) — displays memory usage at each verbose step
-- Added `--threads <N>` CLI flag for explicit CPU thread control
-- Cleaned up `pi_engine.h` (removed verbose doxygen comments)
-- All 46 tests passing, pushed to `origin/main` (commit `103e3d8`)
+## Latest Changes (2026-03-12)
+- **Memory optimization for 5B+ digits** (commit `117af36`):
+  - Aggressive early freeing in `merge_parallel()` — inputs freed via `mpz_realloc2(x,0)` immediately after last use
+  - Parallel depth capping: >3B digits → depth=2 (4 branches), >700M digits → depth=3 (8 branches)
+  - Early freeing in `pi_engine.cpp` — BSResult P/Q/R, sqrt, num_f, den_f, pi_value freed as soon as consumed
+- Previous: RSS tracking, `--threads` CLI flag, header cleanup (commit `103e3d8`)
 
 ## Key Findings from Benchmarking
 

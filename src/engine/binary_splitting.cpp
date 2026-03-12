@@ -142,16 +142,20 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
     size_t max_size = std::max({mpz_size(left.P), mpz_size(left.Q),
                                  mpz_size(right.P), mpz_size(right.Q)});
 
-    // Only parallelize merge for moderate-sized operands.
-    // For very large operands, parallel merge creates 4 concurrent
-    // multiplications that can consume 4x the memory.
-    // Threshold: 50M limbs (~400MB per number). Above this, sequential merge
-    // with aggressive early freeing to minimize peak RSS.
+    // Three-tier merge strategy based on operand size:
+    //
+    // Tier 1 (small, <1K limbs): Sequential — no parallelism overhead
+    // Tier 2 (medium, 1K–50M limbs): Full parallel — 4 concurrent muls, 4 cores
+    // Tier 3 (large, >50M limbs): Semi-parallel — 2 concurrent muls at a time,
+    //         2 cores, with aggressive early freeing between pairs
+    //
+    // Tier 3 gives 2x throughput over sequential while keeping memory bounded:
+    // - Only 2 multiplications alive at once (vs 4 in tier 2)
+    // - Inputs freed between pairs, so peak is ~2x one multiplication
     static constexpr size_t PARALLEL_MERGE_MAX_LIMBS = 50000000;
 
     if (max_size > 1000 && max_size < PARALLEL_MERGE_MAX_LIMBS && num_threads_ > 1) {
-        // Parallel merge: 4 multiplications run concurrently.
-        // Acceptable memory cost for moderate-sized operands.
+        // TIER 2: Full parallel merge — 4 multiplications run concurrently.
         mpz_t t_qr, t_pr, t_pp;
         mpz_init(t_qr); mpz_init(t_pr); mpz_init(t_pp);
 
@@ -167,47 +171,75 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
         multiplier_.multiply(result.Q, left.Q, right.Q);
         f1.get(); f2.get(); f3.get();
 
-        // Free inputs immediately — they are no longer needed
+        // Free inputs immediately
         mpz_realloc2(left.P, 0); mpz_realloc2(left.Q, 0); mpz_realloc2(left.R, 0);
         mpz_realloc2(right.P, 0); mpz_realloc2(right.Q, 0); mpz_realloc2(right.R, 0);
 
         mpz_add(result.R, t_qr, t_pr);
         mpz_swap(result.P, t_pp);
         mpz_clear(t_qr); mpz_clear(t_pr); mpz_clear(t_pp);
-    } else {
-        // Sequential merge with aggressive early freeing.
-        // Order of operations chosen to free each input as soon as possible.
+
+    } else if (max_size >= PARALLEL_MERGE_MAX_LIMBS && num_threads_ > 1) {
+        // TIER 3: Semi-parallel merge — 2 concurrent muls at a time.
+        // Uses 2 cores while keeping memory bounded.
         //
-        // We need: result.R = Q_right * R_left + P_left * R_right
-        //          result.P = P_left * P_right
-        //          result.Q = Q_left * Q_right
-        //
-        // Strategy: compute each product, free consumed inputs immediately.
+        // Pair 1: temp1 = Q_right * R_left  ||  result.R = P_left * R_right
+        // Then free R_left, R_right
+        // Pair 2: result.P = P_left * P_right  ||  result.Q = Q_left * Q_right
+        // Then free all remaining inputs
 
         mpz_t temp1;
         mpz_init(temp1);
 
-        // 1) temp1 = Q_right * R_left  (consumes R_left last use)
-        multiplier_.multiply(temp1, right.Q, left.R);
-        mpz_realloc2(left.R, 0);  // free R_left
+        // Pair 1: both R computations in parallel
+        {
+            auto f1 = std::async(std::launch::async, [&]() {
+                multiplier_.multiply(temp1, right.Q, left.R);
+            });
+            multiplier_.multiply(result.R, left.P, right.R);
+            f1.get();
+        }
+        // Free R_left and R_right (both fully consumed)
+        mpz_realloc2(left.R, 0);
+        mpz_realloc2(right.R, 0);
 
-        // 2) result.R = P_left * R_right  (consumes R_right last use)
-        multiplier_.multiply(result.R, left.P, right.R);
-        mpz_realloc2(right.R, 0);  // free R_right
-
-        // 3) result.R += temp1  (consumes temp1)
+        // Accumulate R
         mpz_add(result.R, result.R, temp1);
         mpz_clear(temp1);
 
-        // 4) result.P = P_left * P_right  (consumes both P's last use)
-        multiplier_.multiply(result.P, left.P, right.P);
-        mpz_realloc2(left.P, 0);   // free P_left
-        mpz_realloc2(right.P, 0);  // free P_right
+        // Pair 2: P*P and Q*Q in parallel
+        {
+            auto f2 = std::async(std::launch::async, [&]() {
+                multiplier_.multiply(result.Q, left.Q, right.Q);
+            });
+            multiplier_.multiply(result.P, left.P, right.P);
+            f2.get();
+        }
+        // Free all remaining inputs
+        mpz_realloc2(left.P, 0); mpz_realloc2(left.Q, 0);
+        mpz_realloc2(right.P, 0); mpz_realloc2(right.Q, 0);
 
-        // 5) result.Q = Q_left * Q_right  (consumes both Q's last use)
+    } else {
+        // TIER 1: Sequential merge (single-threaded or tiny operands).
+        mpz_t temp1;
+        mpz_init(temp1);
+
+        multiplier_.multiply(temp1, right.Q, left.R);
+        mpz_realloc2(left.R, 0);
+
+        multiplier_.multiply(result.R, left.P, right.R);
+        mpz_realloc2(right.R, 0);
+
+        mpz_add(result.R, result.R, temp1);
+        mpz_clear(temp1);
+
+        multiplier_.multiply(result.P, left.P, right.P);
+        mpz_realloc2(left.P, 0);
+        mpz_realloc2(right.P, 0);
+
         multiplier_.multiply(result.Q, left.Q, right.Q);
-        mpz_realloc2(left.Q, 0);   // free Q_left
-        mpz_realloc2(right.Q, 0);  // free Q_right
+        mpz_realloc2(left.Q, 0);
+        mpz_realloc2(right.Q, 0);
     }
 
     return result;
@@ -224,8 +256,29 @@ BSResult BinarySplitting::compute_sequential(unsigned long a, unsigned long b) {
     }
 
     unsigned long m = a + (b - a) / 2;
-    BSResult left = compute_sequential(a, m);
-    BSResult right = compute_sequential(m, b);
+
+    // For ranges small enough that memory isn't a concern, use parallel
+    // tree traversal to keep all cores busy. The threshold is set so that
+    // the P/Q/R values at this level are small enough for concurrent branches.
+    // ~10K terms → numbers with ~100K digits → ~12K limbs → safe to parallelize.
+    static constexpr unsigned long PARALLEL_SUBTREE_THRESHOLD = 10000;
+
+    BSResult left, right;
+    if (num_threads_ > 1 && (b - a) <= PARALLEL_SUBTREE_THRESHOLD && (b - a) >= PARALLEL_THRESHOLD) {
+        // Parallel subtree: fork left/right, both branches are small
+        int sub_depth = 0;
+        unsigned int t = num_threads_;
+        while (t > 1) { sub_depth++; t >>= 1; }
+        auto right_future = std::async(std::launch::async,
+            [this, m, b, sub_depth]() { return compute_parallel(m, b, sub_depth); }
+        );
+        left = compute_parallel(a, m, sub_depth);
+        right = right_future.get();
+    } else {
+        left = compute_sequential(a, m);
+        right = compute_sequential(m, b);
+    }
+
     BSResult result = merge_parallel(left, right);
 
     // Save checkpoint if range is large enough (avoid tiny checkpoints)

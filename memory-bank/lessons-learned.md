@@ -35,3 +35,15 @@
 - **CUDA architecture auto-detection**: Use `CUDA_ARCHITECTURES "native"` (CMake 3.24+) instead of hardcoding architecture numbers. CUDA 13.x dropped support for compute_70 (Volta), so hardcoded lists break on newer toolkits.
 
 - **GPU AMI required**: Standard Amazon Linux AMIs don't include NVIDIA drivers even on GPU instances. Use a "Deep Learning AMI" or "GPU AMI" that comes with drivers + CUDA pre-installed.
+
+## Memory Optimization Lessons
+
+- **Binary splitting peak memory**: At the top of the tree, P, Q, R each have ~N digits (where N is the target). For 5B digits, each is ~2GB. The merge needs all 6 inputs + multiplication scratch (~3x input size). With parallel merge (4 concurrent multiplications), peak can reach 40+ GB.
+
+- **`mpz_realloc2(x, 0)` frees GMP internal storage**: This is the correct way to release memory from an mpz_t without clearing it. The variable remains valid (set to 0) but its limb allocation is freed. Much better than `mpz_set_ui(x, 0)` which keeps the allocation.
+
+- **Parallel depth vs memory tradeoff**: Each level of parallel tree traversal doubles the number of concurrent BSResult triples. For 16 threads (depth=4), 16 branches are alive simultaneously. Capping depth to 2-3 for large computations saves enormous memory with minimal performance impact because top-level merges are memory-bound (GMP FFT), not CPU-bound.
+
+- **Free inputs in merge order**: In sequential merge, order multiplications to free each input as soon as its last use completes. This progressively reduces live memory from 6 inputs to 4, then 2, then 0 during the merge.
+
+- **Free BSResult fields in pi_engine immediately**: P is unused in the final formula (pi = 426880 * sqrt(10005) * Q / R). Free it right after binary splitting. Free Q after multiplying by 426880. Free R after converting to mpf. This saves ~3x the top-level number size before the expensive final computation.
