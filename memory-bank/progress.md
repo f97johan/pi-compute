@@ -13,6 +13,8 @@
 - [x] Cross-architecture benchmark script: Intel/AMD/Graviton3/Graviton4 (commit 5ddaff9)
 - [x] OOM fix: parallel depth=1 for >1.4B digits (commit 9d2347c)
 - [x] Production run script: run_pi.sh with S3 output (commit 66b53f6)
+- [x] Checkpoint disk fix: delete children + raise threshold (commit b79c9b3)
+- [x] Out-of-core binary splitting: --out-of-core flag (commit db6f529)
   - [x] NttEngine wrapping cuFFT
   - [x] Pointwise multiply CUDA kernel
   - [x] Carry propagation

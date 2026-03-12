@@ -10,6 +10,11 @@ set(PI_CPU_SOURCES
     io/chunked_writer.cpp
 )
 
+# FLINT sources (only built with FLINT)
+if(ENABLE_FLINT)
+    list(APPEND PI_CPU_SOURCES arithmetic/flint_multiplier.cpp)
+endif()
+
 # GPU sources (only built with CUDA)
 set(PI_GPU_SOURCES "")
 if(ENABLE_CUDA)
@@ -37,6 +42,12 @@ target_link_libraries(pi_engine_lib PUBLIC
     ${GMP_LIBRARY}
     Threads::Threads
 )
+
+if(ENABLE_FLINT)
+    target_include_directories(pi_engine_lib PUBLIC ${FLINT_INCLUDE_DIRS})
+    target_link_libraries(pi_engine_lib PUBLIC ${FLINT_LIBRARIES})
+    target_link_directories(pi_engine_lib PUBLIC ${FLINT_LIBRARY_DIRS})
+endif()
 
 if(ENABLE_CUDA)
     target_link_libraries(pi_engine_lib PUBLIC

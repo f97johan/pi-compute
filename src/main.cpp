@@ -8,9 +8,14 @@
 #include <cstdlib>
 #include <memory>
 #include <functional>
+#include <thread>
 #include "engine/pi_engine.h"
 #include "arithmetic/gmp_multiplier.h"
 #include "io/chunked_writer.h"
+
+#ifdef PI_FLINT_ENABLED
+#include "arithmetic/flint_multiplier.h"
+#endif
 
 #ifdef PI_CUDA_ENABLED
 #include "arithmetic/gpu_ntt_multiplier.h"
@@ -31,6 +36,8 @@ OPTIONS:
     --gpus <N>          Number of GPUs to use (0 = auto-detect all, default: 0)
     --gpu-threshold <N> Min GMP limbs for GPU path (default: 10000)
     --threads <N>       Number of CPU threads (0 = auto-detect, default: 0)
+    --flint             Use FLINT library for multi-threaded multiplication
+                        (requires build with -DENABLE_FLINT=ON)
     --out-of-core       Enable out-of-core mode: compute wide, merge narrow
                         (better CPU utilization, requires --checkpoint)
     --output <FILE>     Output file path (default: pi_digits.txt)
@@ -51,6 +58,7 @@ int main(int argc, char* argv[]) {
     bool has_digits = false;
     bool use_gpu = false;
     bool use_ntt = false;
+    bool use_flint = false;
     size_t gpu_threshold = 10000;
     int num_gpus = 0;  // 0 = auto-detect
 
@@ -65,6 +73,8 @@ int main(int argc, char* argv[]) {
             has_digits = true;
         } else if (arg == "--output" && i + 1 < argc) {
             config.output_file = argv[++i];
+        } else if (arg == "--flint") {
+            use_flint = true;
         } else if (arg == "--gpu") {
             use_gpu = true;
         } else if (arg == "--ntt") {
@@ -143,6 +153,20 @@ int main(int argc, char* argv[]) {
 #else
             std::cerr << "Error: --gpu requires CUDA build" << std::endl;
             multiplier = std::make_unique<pi::GmpMultiplier>();
+#endif
+        } else if (use_flint) {
+#ifdef PI_FLINT_ENABLED
+            multiplier = std::make_unique<pi::FlintMultiplier>(config.num_threads);
+            if (config.verbose) {
+                unsigned int nt = config.num_threads == 0 ? std::thread::hardware_concurrency() : config.num_threads;
+                std::cout << "FLINT: multi-threaded multiplication ("
+                          << nt << " threads)" << std::endl;
+            }
+            mode_name = "FLINT";
+#else
+            std::cerr << "Error: --flint requires build with -DENABLE_FLINT=ON" << std::endl;
+            std::cerr << "  cmake -B build -DENABLE_FLINT=ON" << std::endl;
+            return 1;
 #endif
         } else {
             multiplier = std::make_unique<pi::GmpMultiplier>();
