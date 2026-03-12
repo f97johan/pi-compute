@@ -38,6 +38,7 @@ OPTIONS:
     --threads <N>       Number of CPU threads (0 = auto-detect, default: 0)
     --flint             Use FLINT library for multi-threaded multiplication
                         (requires build with -DENABLE_FLINT=ON)
+    --integer-math      Use integer-only sqrt+divide (avoids single-threaded mpf)
     --out-of-core       Enable out-of-core mode: compute wide, merge narrow
                         (better CPU utilization, requires --checkpoint)
     --output <FILE>     Output file path (default: pi_digits.txt)
@@ -75,6 +76,8 @@ int main(int argc, char* argv[]) {
             config.output_file = argv[++i];
         } else if (arg == "--flint") {
             use_flint = true;
+        } else if (arg == "--integer-math") {
+            config.integer_math = true;
         } else if (arg == "--gpu") {
             use_gpu = true;
         } else if (arg == "--ntt") {

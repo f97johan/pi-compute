@@ -107,68 +107,16 @@ PiResult PiEngine::compute(const PiConfig& config) {
                   << bs_time << "s | RSS: " << get_rss_mb() << " MB" << std::endl;
     }
 
-    // Step 2: Final computation using mpf (faster than pure integer for sqrt+divide)
-    // pi = 426880 * sqrt(10005) * Q / R
+    // Step 2+3: Final computation → pi_int (integer with N digits after "3.")
     auto final_start = Clock::now();
 
-    mp_bitcnt_t precision_bits = static_cast<mp_bitcnt_t>(precision * 3.3219281) + 64;
-
-    // Compute sqrt(10005)
-    auto sqrt_start = Clock::now();
-    mpf_t sqrt_10005;
-    mpf_init2(sqrt_10005, precision_bits);
-    NewtonDivider::sqrt_to_precision(sqrt_10005, 10005, precision);
-    auto sqrt_end = Clock::now();
-    double sqrt_time = Duration(sqrt_end - sqrt_start).count();
-
-    // Compute pi as mpf: (426880 * sqrt(10005) * Q) / R
     // Free P immediately — it's not needed for the final formula.
     mpz_realloc2(bsr.P, 0);
-
-    auto div_start = Clock::now();
-    mpz_t numerator_int;
-    mpz_init(numerator_int);
-    mpz_mul_ui(numerator_int, bsr.Q, 426880);
-    // Free Q — consumed into numerator_int
-    mpz_realloc2(bsr.Q, 0);
-
-    mpf_t pi_value, num_f, den_f;
-    mpf_init2(pi_value, precision_bits);
-    mpf_init2(num_f, precision_bits);
-    mpf_init2(den_f, precision_bits);
-
-    mpf_set_z(num_f, numerator_int);
-    mpz_clear(numerator_int);  // Free numerator_int — consumed into num_f
-
-    mpf_set_z(den_f, bsr.R);
-    // Free R — consumed into den_f
-    mpz_realloc2(bsr.R, 0);
-
-    mpf_mul(pi_value, num_f, sqrt_10005);
-    mpf_clear(sqrt_10005);  // Free sqrt — consumed into pi_value
-    mpf_clear(num_f);       // Free num_f — consumed into pi_value
-
-    mpf_div(pi_value, pi_value, den_f);
-    mpf_clear(den_f);       // Free den_f — consumed into pi_value
-    auto div_end = Clock::now();
-    double div_time = Duration(div_end - div_start).count();
-
-    double final_time = Duration(div_end - final_start).count();
-
-    if (config.verbose) {
-        std::cout << "  Final computation: " << std::fixed << std::setprecision(3)
-                  << final_time << "s"
-                  << " (sqrt: " << sqrt_time << "s, multiply+divide: " << div_time << "s)"
-                  << " | RSS: " << get_rss_mb() << " MB" << std::endl;
-    }
-
-    // Step 3: Extract as integer and convert to string
-    auto conv_start = Clock::now();
 
     mpz_t pi_int;
     mpz_init(pi_int);
 
-    // Check for pi_int checkpoint (skips both binary splitting AND final computation)
+    // Check for pi_int checkpoint (skips final computation entirely)
     std::string pi_int_ckpt = config.checkpoint_dir.empty() ? "" :
                                config.checkpoint_dir + "/pi_int_" + std::to_string(config.digits) + ".ckpt";
     bool loaded_pi_int = false;
@@ -191,8 +139,153 @@ PiResult PiEngine::compute(const PiConfig& config) {
         }
     }
 
-    if (!loaded_pi_int) {
-        // Scale pi by 10^digits to get an integer
+    double sqrt_time = 0, div_time = 0, final_time = 0;
+
+    if (!loaded_pi_int && config.integer_math) {
+        // ============================================================
+        // INTEGER-ONLY PATH: all computation using mpz (no mpf)
+        // pi * 10^N = 426880 * Q * isqrt(10005 * 10^(2*precision)) / R
+        //
+        // Advantages:
+        // - mpz_mul benefits from our parallel merge (multi-core)
+        // - Avoids single-threaded mpf_sqrt and mpf_div
+        // - No mpf_set_z conversion overhead
+        // ============================================================
+
+        if (config.verbose) {
+            std::cout << "  Using integer-only math (no mpf)" << std::endl;
+        }
+
+        // Step 2a: Compute isqrt(10005 * 10^(2*precision)) using GMP's mpz_sqrt
+        // This gives sqrt(10005) * 10^precision as an integer.
+        // mpz_sqrt uses Karatsuba square root internally — much faster than
+        // Newton iteration with mpz_tdiv_q.
+        auto sqrt_start = Clock::now();
+
+        mpz_t S, sqrt_val;
+        mpz_init(S); mpz_init(sqrt_val);
+
+        // S = 10005 * 10^(2*precision)
+        mpz_ui_pow_ui(S, 10, 2 * precision);
+        mpz_mul_ui(S, S, 10005);
+
+        // sqrt_val = isqrt(S) = floor(sqrt(10005 * 10^(2*precision)))
+        //          = floor(sqrt(10005) * 10^precision)
+        mpz_sqrt(sqrt_val, S);
+        mpz_clear(S);
+
+        auto sqrt_end = Clock::now();
+        sqrt_time = Duration(sqrt_end - sqrt_start).count();
+
+        if (config.verbose) {
+            std::cout << "  Integer sqrt (mpz_sqrt): " << std::fixed << std::setprecision(3)
+                      << sqrt_time << "s"
+                      << " | RSS: " << get_rss_mb() << " MB" << std::endl;
+        }
+
+        // Step 2b: Compute pi_int = 426880 * Q * sqrt_val / (R * 10^guard_digits)
+        // We have extra 'guard_digits' of precision that we need to remove.
+        auto div_start_t = Clock::now();
+
+        // numerator = 426880 * Q * sqrt_val
+        mpz_t numerator;
+        mpz_init(numerator);
+        mpz_mul_ui(numerator, bsr.Q, 426880);
+        mpz_realloc2(bsr.Q, 0);  // Free Q
+
+        multiplier_.multiply(numerator, numerator, sqrt_val);  // Uses parallel merge!
+        mpz_clear(sqrt_val);
+
+        // denominator = R * 10^guard_digits
+        mpz_t denominator;
+        mpz_init(denominator);
+        mpz_t guard_scale;
+        mpz_init(guard_scale);
+        mpz_ui_pow_ui(guard_scale, 10, guard_digits);
+        multiplier_.multiply(denominator, bsr.R, guard_scale);
+        mpz_clear(guard_scale);
+        mpz_realloc2(bsr.R, 0);  // Free R
+
+        // pi_int = numerator / denominator
+        mpz_tdiv_q(pi_int, numerator, denominator);
+        mpz_clear(numerator);
+        mpz_clear(denominator);
+
+        auto div_end_t = Clock::now();
+        div_time = Duration(div_end_t - div_start_t).count();
+        final_time = Duration(div_end_t - final_start).count();
+
+        if (config.verbose) {
+            std::cout << "  Final computation: " << std::fixed << std::setprecision(3)
+                      << final_time << "s"
+                      << " (sqrt: " << sqrt_time << "s, multiply+divide: " << div_time << "s)"
+                      << " | RSS: " << get_rss_mb() << " MB" << std::endl;
+        }
+
+        // Save pi_int checkpoint
+        if (!pi_int_ckpt.empty()) {
+            FILE* f = fopen(pi_int_ckpt.c_str(), "wb");
+            if (f) {
+                size_t count = 0;
+                void* data = mpz_export(nullptr, &count, -1, 1, -1, 0, pi_int);
+                fwrite(&count, sizeof(size_t), 1, f);
+                if (count > 0 && data) { fwrite(data, 1, count, f); free(data); }
+                fclose(f);
+                if (config.verbose) {
+                    std::cout << "  Saved pi_int checkpoint (" << count << " bytes)" << std::endl;
+                }
+            }
+        }
+
+    } else if (!loaded_pi_int) {
+        // ============================================================
+        // FLOATING-POINT PATH (original): uses mpf for sqrt + divide
+        // ============================================================
+
+        mp_bitcnt_t precision_bits = static_cast<mp_bitcnt_t>(precision * 3.3219281) + 64;
+
+        auto sqrt_start = Clock::now();
+        mpf_t sqrt_10005;
+        mpf_init2(sqrt_10005, precision_bits);
+        NewtonDivider::sqrt_to_precision(sqrt_10005, 10005, precision);
+        auto sqrt_end = Clock::now();
+        sqrt_time = Duration(sqrt_end - sqrt_start).count();
+
+        auto div_start_t = Clock::now();
+        mpz_t numerator_int;
+        mpz_init(numerator_int);
+        mpz_mul_ui(numerator_int, bsr.Q, 426880);
+        mpz_realloc2(bsr.Q, 0);
+
+        mpf_t pi_value, num_f, den_f;
+        mpf_init2(pi_value, precision_bits);
+        mpf_init2(num_f, precision_bits);
+        mpf_init2(den_f, precision_bits);
+
+        mpf_set_z(num_f, numerator_int);
+        mpz_clear(numerator_int);
+
+        mpf_set_z(den_f, bsr.R);
+        mpz_realloc2(bsr.R, 0);
+
+        mpf_mul(pi_value, num_f, sqrt_10005);
+        mpf_clear(sqrt_10005);
+        mpf_clear(num_f);
+
+        mpf_div(pi_value, pi_value, den_f);
+        mpf_clear(den_f);
+        auto div_end_t = Clock::now();
+        div_time = Duration(div_end_t - div_start_t).count();
+        final_time = Duration(div_end_t - final_start).count();
+
+        if (config.verbose) {
+            std::cout << "  Final computation: " << std::fixed << std::setprecision(3)
+                      << final_time << "s"
+                      << " (sqrt: " << sqrt_time << "s, multiply+divide: " << div_time << "s)"
+                      << " | RSS: " << get_rss_mb() << " MB" << std::endl;
+        }
+
+        // Scale and extract integer
         mpf_t scale_f;
         mpf_init2(scale_f, precision_bits);
         mpz_t scale_z;
@@ -203,9 +296,8 @@ PiResult PiEngine::compute(const PiConfig& config) {
         mpf_mul(pi_value, pi_value, scale_f);
         mpf_clear(scale_f);
 
-        // Extract integer part, then immediately free the huge mpf
         mpz_set_f(pi_int, pi_value);
-        mpf_clear(pi_value);  // Free ~2*precision_bits of RAM
+        mpf_clear(pi_value);
 
         // Save pi_int checkpoint
         if (!pi_int_ckpt.empty()) {
@@ -222,9 +314,14 @@ PiResult PiEngine::compute(const PiConfig& config) {
             }
         }
     } else {
-        // pi_value was never used, but still initialized — free it
-        mpf_clear(pi_value);
+        // Loaded from checkpoint — free BSResult
+        mpz_realloc2(bsr.Q, 0);
+        mpz_realloc2(bsr.R, 0);
+        final_time = Duration(Clock::now() - final_start).count();
     }
+
+    // Step 4: Convert to string
+    auto conv_start = Clock::now();
 
     // Convert to string using parallel divide-and-conquer
     // For large numbers (>100M digits), stream directly to file to save RAM

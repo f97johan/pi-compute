@@ -15,6 +15,7 @@
 - [x] Production run script: run_pi.sh with S3 output (commit 66b53f6)
 - [x] Checkpoint disk fix: delete children + raise threshold (commit b79c9b3)
 - [x] Out-of-core binary splitting: --out-of-core flag (commit db6f529)
+- [x] FLINT multi-threaded multiplication: --flint flag (commit 58a5bb1)
   - [x] NttEngine wrapping cuFFT
   - [x] Pointwise multiply CUDA kernel
   - [x] Carry propagation

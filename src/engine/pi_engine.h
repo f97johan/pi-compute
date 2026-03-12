@@ -20,6 +20,7 @@ struct PiConfig {
     bool resume = false;
     unsigned int num_threads = 0;  ///< 0 = auto-detect
     bool out_of_core = false;      ///< Enable out-of-core mode (requires --checkpoint)
+    bool integer_math = false;     ///< Use integer-only sqrt+divide (avoids mpf)
 };
 
 struct PiResult {
