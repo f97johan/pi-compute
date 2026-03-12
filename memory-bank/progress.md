@@ -7,6 +7,7 @@
 - [x] Memory bank initialization
 - [x] Phase 1: CPU-only pi engine (46 tests, 10M digits in 4.27s)
 - [x] Phase 2: GPU code written and pushed
+- [x] RSS memory tracking + --threads CLI flag (commit 103e3d8)
   - [x] NttEngine wrapping cuFFT
   - [x] Pointwise multiply CUDA kernel
   - [x] Carry propagation

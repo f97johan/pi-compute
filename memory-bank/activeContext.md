@@ -3,6 +3,12 @@
 ## Current State
 Project is mature with CPU-only being the optimal path. GPU acceleration implemented but not beneficial due to per-call overhead exceeding GMP's optimized CPU FFT.
 
+## Latest Changes (2026-03-11)
+- Added RSS memory tracking (`get_rss_mb()`) — displays memory usage at each verbose step
+- Added `--threads <N>` CLI flag for explicit CPU thread control
+- Cleaned up `pi_engine.h` (removed verbose doxygen comments)
+- All 46 tests passing, pushed to `origin/main` (commit `103e3d8`)
+
 ## Key Findings from Benchmarking
 
 ### p4d.24xlarge (96 vCPU + 8x A100), 100M digits:

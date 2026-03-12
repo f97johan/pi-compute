@@ -112,10 +112,15 @@ PiResult PiEngine::compute(const PiConfig& config) {
     double sqrt_time = Duration(sqrt_end - sqrt_start).count();
 
     // Compute pi as mpf: (426880 * sqrt(10005) * Q) / R
+    // Free P immediately — it's not needed for the final formula.
+    mpz_realloc2(bsr.P, 0);
+
     auto div_start = Clock::now();
     mpz_t numerator_int;
     mpz_init(numerator_int);
     mpz_mul_ui(numerator_int, bsr.Q, 426880);
+    // Free Q — consumed into numerator_int
+    mpz_realloc2(bsr.Q, 0);
 
     mpf_t pi_value, num_f, den_f;
     mpf_init2(pi_value, precision_bits);
@@ -123,10 +128,18 @@ PiResult PiEngine::compute(const PiConfig& config) {
     mpf_init2(den_f, precision_bits);
 
     mpf_set_z(num_f, numerator_int);
+    mpz_clear(numerator_int);  // Free numerator_int — consumed into num_f
+
     mpf_set_z(den_f, bsr.R);
+    // Free R — consumed into den_f
+    mpz_realloc2(bsr.R, 0);
 
     mpf_mul(pi_value, num_f, sqrt_10005);
+    mpf_clear(sqrt_10005);  // Free sqrt — consumed into pi_value
+    mpf_clear(num_f);       // Free num_f — consumed into pi_value
+
     mpf_div(pi_value, pi_value, den_f);
+    mpf_clear(den_f);       // Free den_f — consumed into pi_value
     auto div_end = Clock::now();
     double div_time = Duration(div_end - div_start).count();
 
@@ -176,13 +189,13 @@ PiResult PiEngine::compute(const PiConfig& config) {
         mpz_init(scale_z);
         mpz_ui_pow_ui(scale_z, 10, config.digits);
         mpf_set_z(scale_f, scale_z);
-        mpf_mul(pi_value, pi_value, scale_f);
-
-        // Extract integer part
-        mpz_set_f(pi_int, pi_value);
-
-        mpf_clear(scale_f);
         mpz_clear(scale_z);
+        mpf_mul(pi_value, pi_value, scale_f);
+        mpf_clear(scale_f);
+
+        // Extract integer part, then immediately free the huge mpf
+        mpz_set_f(pi_int, pi_value);
+        mpf_clear(pi_value);  // Free ~2*precision_bits of RAM
 
         // Save pi_int checkpoint
         if (!pi_int_ckpt.empty()) {
@@ -198,6 +211,9 @@ PiResult PiEngine::compute(const PiConfig& config) {
                 }
             }
         }
+    } else {
+        // pi_value was never used, but still initialized — free it
+        mpf_clear(pi_value);
     }
 
     // Convert to string using parallel divide-and-conquer
@@ -281,13 +297,8 @@ PiResult PiEngine::compute(const PiConfig& config) {
                   << std::setw(5) << std::setprecision(1) << (conv_time / total_time * 100) << "%)" << std::endl;
     }
 
-    // Cleanup
-    mpz_clear(numerator_int);
+    // Cleanup (most variables already freed early to reduce peak RSS)
     mpz_clear(pi_int);
-    mpf_clear(sqrt_10005);
-    mpf_clear(pi_value);
-    mpf_clear(num_f);
-    mpf_clear(den_f);
 
     return PiResult{result_str, total_time, terms};
 }

@@ -138,8 +138,6 @@ BSResult BinarySplitting::base_case(unsigned long a) {
 
 BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
     BSResult result;
-    mpz_t temp1, temp2;
-    mpz_init(temp1); mpz_init(temp2);
 
     size_t max_size = std::max({mpz_size(left.P), mpz_size(left.Q),
                                  mpz_size(right.P), mpz_size(right.Q)});
@@ -147,13 +145,13 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
     // Only parallelize merge for moderate-sized operands.
     // For very large operands, parallel merge creates 4 concurrent
     // multiplications that can consume 4x the memory.
-    // At 10B digits (top-level ~80M limbs), this causes OOM on 64GB.
-    // Threshold: 50M limbs (~400MB). Above this, sequential merge.
-    // This keeps parallel merge active for 1B digits (top ~8M limbs)
-    // while preventing OOM at 10B+ digits.
+    // Threshold: 50M limbs (~400MB per number). Above this, sequential merge
+    // with aggressive early freeing to minimize peak RSS.
     static constexpr size_t PARALLEL_MERGE_MAX_LIMBS = 50000000;
 
     if (max_size > 1000 && max_size < PARALLEL_MERGE_MAX_LIMBS && num_threads_ > 1) {
+        // Parallel merge: 4 multiplications run concurrently.
+        // Acceptable memory cost for moderate-sized operands.
         mpz_t t_qr, t_pr, t_pp;
         mpz_init(t_qr); mpz_init(t_pr); mpz_init(t_pp);
 
@@ -169,20 +167,49 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
         multiplier_.multiply(result.Q, left.Q, right.Q);
         f1.get(); f2.get(); f3.get();
 
+        // Free inputs immediately — they are no longer needed
+        mpz_realloc2(left.P, 0); mpz_realloc2(left.Q, 0); mpz_realloc2(left.R, 0);
+        mpz_realloc2(right.P, 0); mpz_realloc2(right.Q, 0); mpz_realloc2(right.R, 0);
+
         mpz_add(result.R, t_qr, t_pr);
         mpz_swap(result.P, t_pp);
         mpz_clear(t_qr); mpz_clear(t_pr); mpz_clear(t_pp);
     } else {
+        // Sequential merge with aggressive early freeing.
+        // Order of operations chosen to free each input as soon as possible.
+        //
+        // We need: result.R = Q_right * R_left + P_left * R_right
+        //          result.P = P_left * P_right
+        //          result.Q = Q_left * Q_right
+        //
+        // Strategy: compute each product, free consumed inputs immediately.
+
+        mpz_t temp1;
+        mpz_init(temp1);
+
+        // 1) temp1 = Q_right * R_left  (consumes R_left last use)
         multiplier_.multiply(temp1, right.Q, left.R);
-        multiplier_.multiply(temp2, left.P, right.R);
-        mpz_add(result.R, temp1, temp2);
+        mpz_realloc2(left.R, 0);  // free R_left
+
+        // 2) result.R = P_left * R_right  (consumes R_right last use)
+        multiplier_.multiply(result.R, left.P, right.R);
+        mpz_realloc2(right.R, 0);  // free R_right
+
+        // 3) result.R += temp1  (consumes temp1)
+        mpz_add(result.R, result.R, temp1);
+        mpz_clear(temp1);
+
+        // 4) result.P = P_left * P_right  (consumes both P's last use)
         multiplier_.multiply(result.P, left.P, right.P);
+        mpz_realloc2(left.P, 0);   // free P_left
+        mpz_realloc2(right.P, 0);  // free P_right
+
+        // 5) result.Q = Q_left * Q_right  (consumes both Q's last use)
         multiplier_.multiply(result.Q, left.Q, right.Q);
+        mpz_realloc2(left.Q, 0);   // free Q_left
+        mpz_realloc2(right.Q, 0);  // free Q_right
     }
 
-    mpz_clear(temp1); mpz_clear(temp2);
-    mpz_set_ui(left.P, 0); mpz_set_ui(left.Q, 0); mpz_set_ui(left.R, 0);
-    mpz_set_ui(right.P, 0); mpz_set_ui(right.Q, 0); mpz_set_ui(right.R, 0);
     return result;
 }
 
@@ -280,6 +307,30 @@ BSResult BinarySplitting::compute(unsigned long a, unsigned long b) {
         int max_depth = 0;
         unsigned int t = num_threads_;
         while (t > 1) { max_depth++; t >>= 1; }
+
+        // Cap parallel depth for large computations to limit peak memory.
+        // Each parallel level doubles the number of concurrent BSResult triples
+        // (P, Q, R) alive simultaneously. For multi-billion digit computations,
+        // the top-level numbers are multi-GB each, so having 16 concurrent
+        // branches (depth=4) can easily exceed available RAM.
+        //
+        // depth=2 → 4 concurrent branches: good balance of parallelism vs memory
+        // depth=3 → 8 concurrent branches: ok for moderate sizes
+        // depth=4+ → 16+ branches: only safe for <1B digits
+        //
+        // The parallelism loss is minimal because:
+        // 1. Top-level merges are memory-bound (GMP FFT), not CPU-bound
+        // 2. GMP internally uses threads for large multiplications
+        // 3. The sequential top levels still parallelize their merges
+        unsigned long range = b - a;
+        if (range > 200000000 && max_depth > 2) {
+            // >~3B digits: cap at depth 2 (4 branches)
+            max_depth = 2;
+        } else if (range > 50000000 && max_depth > 3) {
+            // >~700M digits: cap at depth 3 (8 branches)
+            max_depth = 3;
+        }
+
         result = compute_parallel(a, b, max_depth);
     }
 
