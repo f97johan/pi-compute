@@ -51,3 +51,7 @@
 - **Depth=2 still OOMs for 5B digits on 64 GB**: With 4 concurrent branches (depth=2), the level-1 merges run in parallel, each with ~1.25B digit numbers. Two concurrent merges × (6 inputs + scratch) exceeded 60 GB. Depth=1 (2 branches) reduces peak to ~21 GB for 5B digits. The key insight: it's not just the top-level merge that matters — the level below also runs concurrently and its memory adds up.
 
 - **GMP FFT scratch is the hidden memory killer**: GMP's FFT multiplication of two N-byte numbers allocates ~8N bytes of scratch internally. This is invisible to our code but dominates peak RSS. Two concurrent multiplications of 2 GB numbers = 32 GB of scratch alone.
+
+- **Checkpoint files accumulate and fill disk**: The time-based checkpointing (every 60s) creates checkpoint files at many tree levels. For 50B digits, this exhausted 200 GB in ~4 hours. Fix: (1) delete child checkpoints when parent is saved (children are redundant), (2) raise minimum checkpoint range from 1K to 100K terms to avoid thousands of tiny files.
+
+- **Disk space for large runs**: Output file = N bytes (1 byte/digit). Top-level checkpoint = ~3 × 0.415 × N bytes. With cleanup, total disk ≈ 2 × N bytes. For 50B digits: ~100 GB minimum, 500 GB recommended.

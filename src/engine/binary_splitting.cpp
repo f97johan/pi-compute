@@ -8,15 +8,19 @@
  */
 
 #include "binary_splitting.h"
+#include "pi_engine.h"
 #include <cmath>
 #include <cassert>
 #include <vector>
 #include <future>
+#include <thread>
+#include <mutex>
 #include <algorithm>
 #include <fstream>
 #include <chrono>
 #include <iostream>
 #include <atomic>
+#include <stdexcept>
 #include <sys/stat.h>
 
 namespace pi {
@@ -356,6 +360,215 @@ BSResult BinarySplitting::compute_parallel(unsigned long a, unsigned long b, int
     return result;
 }
 
+void BinarySplitting::enable_out_of_core(unsigned int num_chunks) {
+    out_of_core_enabled_ = true;
+    ooc_num_chunks_ = num_chunks;
+}
+
+BSResult BinarySplitting::compute_out_of_core(unsigned long a, unsigned long b) {
+    assert(b > a);
+    assert(checkpointing_enabled_);  // OOC requires checkpoint dir for temp files
+
+    unsigned long range = b - a;
+
+    // Determine number of chunks: each chunk should be small enough to compute
+    // quickly in RAM, but large enough to amortize disk I/O.
+    // Target: ~50K-500K terms per chunk → ~700K-7M digits → ~300MB-3GB RAM each.
+    unsigned int num_chunks = ooc_num_chunks_;
+    if (num_chunks == 0) {
+        // Auto: aim for ~100K terms per chunk, rounded up to power of 2
+        num_chunks = static_cast<unsigned int>(range / 100000);
+        if (num_chunks < 2) num_chunks = 2;
+        // Round up to next power of 2 (required for balanced merge tree)
+        unsigned int p = 1;
+        while (p < num_chunks) p <<= 1;
+        num_chunks = p;
+        // Cap at reasonable maximum
+        if (num_chunks > 4096) num_chunks = 4096;
+    }
+
+    // Ensure power of 2
+    {
+        unsigned int p = 1;
+        while (p < num_chunks) p <<= 1;
+        num_chunks = p;
+    }
+
+    unsigned long chunk_size = range / num_chunks;
+    if (chunk_size == 0) {
+        // Range too small for OOC, fall back to sequential
+        return compute_sequential(a, b);
+    }
+
+    std::cout << "  Out-of-core: " << num_chunks << " chunks of ~"
+              << chunk_size << " terms each" << std::endl;
+
+    // ================================================================
+    // Phase 1: COMPUTE — parallel computation of all chunks
+    // ================================================================
+    std::cout << "  Phase 1: Computing " << num_chunks << " chunks in parallel..." << std::endl;
+    auto phase1_start = std::chrono::steady_clock::now();
+
+    // Build chunk boundaries
+    std::vector<unsigned long> boundaries;
+    for (unsigned int i = 0; i <= num_chunks; ++i) {
+        boundaries.push_back(a + (range * i) / num_chunks);
+    }
+
+    // Check which chunks already have results on disk
+    std::vector<bool> chunk_done(num_chunks, false);
+    unsigned int chunks_cached = 0;
+    for (unsigned int i = 0; i < num_chunks; ++i) {
+        std::string path = ckpt_path(checkpoint_dir_, boundaries[i], boundaries[i + 1]);
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f) {
+            fclose(f);
+            chunk_done[i] = true;
+            chunks_cached++;
+        }
+    }
+    if (chunks_cached > 0) {
+        std::cout << "    " << chunks_cached << "/" << num_chunks
+                  << " chunks already on disk (resuming)" << std::endl;
+    }
+
+    // Compute remaining chunks using a thread pool
+    std::atomic<unsigned int> next_chunk{0};
+    std::atomic<unsigned int> completed{chunks_cached};
+    std::mutex cout_mutex;
+
+    auto worker = [&]() {
+        while (true) {
+            unsigned int idx = next_chunk.fetch_add(1);
+            if (idx >= num_chunks) break;
+            if (chunk_done[idx]) continue;
+
+            unsigned long ca = boundaries[idx];
+            unsigned long cb = boundaries[idx + 1];
+
+            // Compute this chunk sequentially (parallelism comes from running
+            // multiple workers concurrently, not from within each chunk).
+            // compute_sequential still uses merge_parallel for each merge,
+            // giving 2-4 cores per merge via the tier system.
+            BSResult chunk_result = compute_sequential(ca, cb);
+
+            // Save to disk and free RAM
+            save_bs_result(ckpt_path(checkpoint_dir_, ca, cb), chunk_result);
+
+            unsigned int done = completed.fetch_add(1) + 1;
+            {
+                std::lock_guard<std::mutex> lock(cout_mutex);
+                std::cout << "    Chunk " << done << "/" << num_chunks
+                          << " done: [" << ca << ", " << cb << ")"
+                          << " | RSS: " << pi::PiEngine::get_rss_mb() << " MB"
+                          << std::endl;
+            }
+        }
+    };
+
+    // Launch worker threads — but limit concurrency to avoid OOM.
+    // Each chunk uses ~10 * (chunk_digits) * 0.415 bytes of RAM.
+    // With chunk_size terms, chunk_digits ≈ chunk_size * 14.18.
+    // RAM per chunk ≈ chunk_size * 14.18 * 10 * 0.415 ≈ chunk_size * 59 bytes.
+    // For 100K terms: ~6 MB per chunk → can run many concurrently.
+    // For 1M terms: ~59 MB per chunk → still fine.
+    // Limit to num_threads_ concurrent workers to avoid thread explosion.
+    unsigned int num_workers = std::min(num_threads_, num_chunks);
+    std::vector<std::thread> workers;
+    for (unsigned int i = 0; i < num_workers; ++i) {
+        workers.emplace_back(worker);
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+
+    auto phase1_end = std::chrono::steady_clock::now();
+    double phase1_time = std::chrono::duration<double>(phase1_end - phase1_start).count();
+    std::cout << "  Phase 1 complete: " << phase1_time << "s"
+              << " | RSS: " << pi::PiEngine::get_rss_mb() << " MB" << std::endl;
+
+    // ================================================================
+    // Phase 2: MERGE — bottom-up cascade, loading pairs from disk
+    // ================================================================
+    std::cout << "  Phase 2: Merging " << num_chunks << " chunks bottom-up..." << std::endl;
+    auto phase2_start = std::chrono::steady_clock::now();
+
+    // Current level's chunk boundaries
+    std::vector<unsigned long> current_bounds = boundaries;
+    unsigned int current_count = num_chunks;
+
+    while (current_count > 1) {
+        unsigned int next_count = current_count / 2;
+        std::cout << "    Merge level: " << current_count << " → " << next_count
+                  << " chunks" << std::endl;
+
+        // Merge pairs: [0,1], [2,3], [4,5], ...
+        // For small enough merges, parallelize across pairs
+        for (unsigned int i = 0; i < current_count; i += 2) {
+            unsigned long la = current_bounds[i];
+            unsigned long lm = current_bounds[i + 1];
+            unsigned long rb = current_bounds[i + 2];
+
+            std::string left_path = ckpt_path(checkpoint_dir_, la, lm);
+            std::string right_path = ckpt_path(checkpoint_dir_, lm, rb);
+            std::string merged_path = ckpt_path(checkpoint_dir_, la, rb);
+
+            // Check if merged result already exists (resume support)
+            FILE* mf = fopen(merged_path.c_str(), "rb");
+            if (mf) {
+                fclose(mf);
+                // Delete children
+                remove(left_path.c_str());
+                remove(right_path.c_str());
+                continue;
+            }
+
+            // Load left and right from disk
+            BSResult left, right;
+            if (!load_bs_result(left_path, left)) {
+                throw std::runtime_error("Failed to load chunk: " + left_path);
+            }
+            if (!load_bs_result(right_path, right)) {
+                throw std::runtime_error("Failed to load chunk: " + right_path);
+            }
+
+            // Merge
+            BSResult merged = merge_parallel(left, right);
+
+            // Save merged result, delete children
+            save_bs_result(merged_path, merged);
+            remove(left_path.c_str());
+            remove(right_path.c_str());
+
+            std::cout << "      Merged [" << la << ", " << rb << ")"
+                      << " | RSS: " << pi::PiEngine::get_rss_mb() << " MB"
+                      << std::endl;
+        }
+
+        // Build next level boundaries
+        std::vector<unsigned long> next_bounds;
+        for (unsigned int i = 0; i <= current_count; i += 2) {
+            next_bounds.push_back(current_bounds[i]);
+        }
+        current_bounds = next_bounds;
+        current_count = next_count;
+    }
+
+    auto phase2_end = std::chrono::steady_clock::now();
+    double phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();
+    std::cout << "  Phase 2 complete: " << phase2_time << "s"
+              << " | RSS: " << pi::PiEngine::get_rss_mb() << " MB" << std::endl;
+
+    // Load final result from disk
+    std::string final_path = ckpt_path(checkpoint_dir_, a, b);
+    BSResult result;
+    if (!load_bs_result(final_path, result)) {
+        throw std::runtime_error("Failed to load final result: " + final_path);
+    }
+
+    return result;
+}
+
 BSResult BinarySplitting::compute(unsigned long a, unsigned long b) {
     assert(b > a);
 
@@ -363,6 +576,11 @@ BSResult BinarySplitting::compute(unsigned long a, unsigned long b) {
     if (checkpointing_enabled_) {
         BSResult resumed;
         if (try_resume(a, b, resumed)) return resumed;
+    }
+
+    // Out-of-core mode: compute wide, merge narrow
+    if (out_of_core_enabled_ && checkpointing_enabled_ && num_threads_ > 1) {
+        return compute_out_of_core(a, b);
     }
 
     BSResult result;
@@ -374,39 +592,12 @@ BSResult BinarySplitting::compute(unsigned long a, unsigned long b) {
         while (t > 1) { max_depth++; t >>= 1; }
 
         // Cap parallel depth for large computations to limit peak memory.
-        // Each parallel level doubles the number of concurrent BSResult triples
-        // (P, Q, R) alive simultaneously. For multi-billion digit computations,
-        // the top-level numbers are multi-GB each.
-        //
-        // Memory model: at depth D, we have 2^D concurrent branches.
-        // Each branch's merge needs ~8.3 * (N / 2^D) bytes at peak.
-        // But 2^D branches are alive simultaneously, so total peak is
-        // roughly ~8.3 * N bytes regardless of depth (the work just shifts).
-        //
-        // The REAL issue is that at depth D, the level-(D-1) merge has
-        // 2 concurrent merges of (N/2)-digit numbers, each needing scratch.
-        // With depth=2: 2 concurrent merges at level 1, each with N/4 numbers,
-        // PLUS the 4 branch results alive = ~12 * (N/4) * 0.415 bytes.
-        //
-        // Empirically:
-        // - depth=1 (2 branches): fits in ~10 * N * 0.415 bytes
-        //   5B digits → ~21 GB peak → fits in 64 GB ✓
-        // - depth=2 (4 branches): needs ~14 * N * 0.415 bytes
-        //   5B digits → ~29 GB peak, but with scratch → ~60 GB → OOM on 64 GB ✗
-        //
-        // The parallelism loss from depth=1 is compensated by:
-        // 1. Semi-parallel merge (2 concurrent muls) at every level
-        // 2. Parallel subtrees at the bottom (<10K terms)
-        // 3. compute_sequential still calls merge_parallel for each merge
         unsigned long range = b - a;
         if (range > 100000000 && max_depth > 1) {
-            // >~1.4B digits: cap at depth 1 (2 branches)
             max_depth = 1;
         } else if (range > 50000000 && max_depth > 2) {
-            // >~700M digits: cap at depth 2 (4 branches)
             max_depth = 2;
         } else if (range > 10000000 && max_depth > 3) {
-            // >~140M digits: cap at depth 3 (8 branches)
             max_depth = 3;
         }
 

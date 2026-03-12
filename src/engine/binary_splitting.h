@@ -50,6 +50,22 @@ public:
     void enable_checkpointing(const std::string& dir, int interval_seconds = 60);
 
     /**
+     * @brief Enable out-of-core mode: compute wide, merge narrow.
+     *
+     * Phase 1: Splits the range into many small subtrees, computes each
+     * in parallel using all cores, and serializes results to disk.
+     * Phase 2: Merges results from disk in a bottom-up cascade,
+     * loading only two at a time.
+     *
+     * Requires checkpointing to be enabled (uses the same directory).
+     * Gives much better CPU utilization for large computations at the
+     * cost of disk I/O (~400 GB for 50B digits).
+     *
+     * @param num_chunks Number of subtrees to split into (0 = auto, ~2x threads)
+     */
+    void enable_out_of_core(unsigned int num_chunks = 0);
+
+    /**
      * @brief Try to resume from a checkpoint.
      * @return true if a valid checkpoint was found and loaded
      */
@@ -64,6 +80,10 @@ private:
     std::string checkpoint_dir_;
     int checkpoint_interval_ = 60;
 
+    // Out-of-core state
+    bool out_of_core_enabled_ = false;
+    unsigned int ooc_num_chunks_ = 0;
+
     static constexpr unsigned long PARALLEL_THRESHOLD = 64;
 
     BSResult base_case(unsigned long a);
@@ -76,6 +96,7 @@ private:
 
     BSResult compute_sequential(unsigned long a, unsigned long b);
     BSResult compute_parallel(unsigned long a, unsigned long b, int depth);
+    BSResult compute_out_of_core(unsigned long a, unsigned long b);
 
     void save_checkpoint(unsigned long a, unsigned long b, const BSResult& result);
 };

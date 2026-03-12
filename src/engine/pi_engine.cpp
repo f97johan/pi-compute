@@ -84,6 +84,16 @@ PiResult PiEngine::compute(const PiConfig& config) {
             std::cout << "  Checkpointing: " << config.checkpoint_dir << std::endl;
         }
     }
+    if (config.out_of_core) {
+        if (config.checkpoint_dir.empty()) {
+            std::cerr << "  WARNING: --out-of-core requires --checkpoint, ignoring" << std::endl;
+        } else {
+            bs.enable_out_of_core();
+            if (config.verbose) {
+                std::cout << "  Out-of-core: enabled (compute wide, merge narrow)" << std::endl;
+            }
+        }
+    }
     if (config.verbose) {
         std::cout << "  Threads: " << bs.thread_count()
                   << " | RSS: " << get_rss_mb() << " MB" << std::endl;

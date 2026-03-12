@@ -31,6 +31,8 @@ OPTIONS:
     --gpus <N>          Number of GPUs to use (0 = auto-detect all, default: 0)
     --gpu-threshold <N> Min GMP limbs for GPU path (default: 10000)
     --threads <N>       Number of CPU threads (0 = auto-detect, default: 0)
+    --out-of-core       Enable out-of-core mode: compute wide, merge narrow
+                        (better CPU utilization, requires --checkpoint)
     --output <FILE>     Output file path (default: pi_digits.txt)
     --checkpoint <DIR>  Enable checkpointing to directory (for crash recovery)
     --resume            Resume from checkpoint (requires --checkpoint)
@@ -74,6 +76,8 @@ int main(int argc, char* argv[]) {
             gpu_threshold = std::stoul(argv[++i]);
         } else if (arg == "--threads" && i + 1 < argc) {
             config.num_threads = std::stoul(argv[++i]);
+        } else if (arg == "--out-of-core") {
+            config.out_of_core = true;
         } else if (arg == "--checkpoint" && i + 1 < argc) {
             config.checkpoint_dir = argv[++i];
         } else if (arg == "--resume") {

@@ -19,6 +19,7 @@ struct PiConfig {
     std::string checkpoint_dir;
     bool resume = false;
     unsigned int num_threads = 0;  ///< 0 = auto-detect
+    bool out_of_core = false;      ///< Enable out-of-core mode (requires --checkpoint)
 };
 
 struct PiResult {
