@@ -108,21 +108,33 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     int total_steps = 0;
     { size_t t = q; while (t > 0) { total_steps++; t >>= 1; } }
 
+    if (verbose) {
+        std::cout << "    q=" << q << " (binary:";
+        for (int i = total_steps - 1; i >= 0; --i)
+            std::cout << ((q >> i) & 1);
+        std::cout << "), " << total_steps << " steps" << std::endl;
+    }
+
     while (e > 0) {
-        if (e & 1) {
+        bool bit_set = (e & 1);
+        if (bit_set) {
             safe_mul(tmp, result, b);
             mpz_swap(result, tmp);
         }
         e >>= 1;
         step++;
+
+        if (verbose) {
+            std::cout << "    step " << step << "/" << total_steps
+                      << " bit=" << bit_set
+                      << " result=" << mpz_sizeinbase(result, 10) << "d"
+                      << " base=" << mpz_sizeinbase(b, 10) << "d"
+                      << " e_remaining=" << e
+                      << " | RSS: " << PiEngine::get_rss_mb() << " MB"
+                      << std::endl;
+        }
+
         if (e > 0) {
-            if (verbose) {
-                std::cout << "    pow step " << step << "/" << total_steps
-                          << " (base: " << mpz_sizeinbase(b, 10) << " digits"
-                          << ", ~" << (mpz_size(b) * 8 / (1024*1024)) << " MB)"
-                          << " | RSS: " << PiEngine::get_rss_mb() << " MB"
-                          << std::endl;
-            }
             safe_mul(tmp, b, b);
             mpz_swap(b, tmp);
         }
