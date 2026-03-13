@@ -40,12 +40,18 @@ using Duration = std::chrono::duration<double>;
 /// Multiply two mpz_t values, using FLINT if available and operands are large.
 /// GMP 6.2.1 has silent corruption in mpz_mul when both operands exceed ~5B digits.
 /// FLINT's fmpz_mul uses a different FFT implementation that doesn't have this bug.
-static void safe_mul(mpz_t result, const mpz_t a, const mpz_t b) {
-    size_t max_size = std::max(mpz_size(a), mpz_size(b));
+static void safe_mul(mpz_t result, const mpz_t a, const mpz_t b,
+                      bool verbose = false) {
+    size_t sa = mpz_size(a), sb = mpz_size(b);
+    size_t max_size = std::max(sa, sb);
 
 #ifdef PI_FLINT_ENABLED
     // Use FLINT for large multiplications to avoid GMP corruption
     if (max_size > 500000000UL) {  // > ~4GB per operand
+        if (verbose) {
+            std::cout << "      [safe_mul] Using FLINT: " << sa << " × " << sb
+                      << " limbs" << std::endl;
+        }
         fmpz_t fa, fb, fr;
         fmpz_init(fa); fmpz_init(fb); fmpz_init(fr);
         fmpz_set_mpz(fa, a);
@@ -57,7 +63,10 @@ static void safe_mul(mpz_t result, const mpz_t a, const mpz_t b) {
     }
 #endif
 
-    // GMP for small-to-medium operands (fast, no corruption)
+    if (verbose && max_size > 100000000UL) {
+        std::cout << "      [safe_mul] Using GMP: " << sa << " × " << sb
+                  << " limbs (below FLINT threshold)" << std::endl;
+    }
     mpz_mul(result, a, b);
 }
 
@@ -118,7 +127,7 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     while (e > 0) {
         bool bit_set = (e & 1);
         if (bit_set) {
-            safe_mul(tmp, result, b);
+            safe_mul(tmp, result, b, verbose);
             mpz_swap(result, tmp);
         }
         e >>= 1;
@@ -135,7 +144,7 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
         }
 
         if (e > 0) {
-            safe_mul(tmp, b, b);
+            safe_mul(tmp, b, b, verbose);
             mpz_swap(b, tmp);
         }
     }
@@ -360,7 +369,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
                           << " (" << mpz_sizeinbase(scale, 10) << " digits)..."
                           << " | RSS: " << get_rss_mb() << " MB" << std::endl;
             }
-            safe_mul(numerator, numerator, scale);
+            safe_mul(numerator, numerator, scale, config.verbose);
             mpz_clear(scale);
         }
 
