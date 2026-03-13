@@ -56,4 +56,14 @@
 
 - **Disk space for large runs**: Output file = N bytes (1 byte/digit). Top-level checkpoint = ~3 × 0.415 × N bytes. With cleanup, total disk ≈ 2 × N bytes. For 50B digits: ~100 GB minimum, 500 GB recommended.
 
+- **GMP mpf layer has a ~15B digit limit**: `mpf_init2` with `precision_bits > 2^31` overflows a 32-bit intermediate, producing "Cannot allocate memory (size=18.4EB)". Use `--integer-math` for >15B digits.
+
+- **GMP mpz_ui_pow_ui has a ~4B limb result limit**: Results larger than ~4 billion limbs trigger "gmp: overflow in mpz type". Use custom `mpz_pow10` with chunked computation.
+
+- **GMP mpz_mul silently corrupts results for very large operands**: When both operands exceed ~5B digits (~2 GB each), `mpz_mul` produces wrong results without any error. This affects both in-place (`mpz_mul(x,x,x)`) and separate-output (`mpz_mul(r,a,b)`) calls. The corruption appears to be in GMP's FFT implementation for very large transforms. Workaround: use iterative multiplication (large × small) instead of binary exponentiation (large × large).
+
+- **FLINT doesn't help at our scales**: FLINT 3.4.0's `fmpz_mul` showed 0% speedup over GMP at 100M digits on Graviton4 (96 vCPU). FLINT uses ~2× more RSS. The multi-threaded FFT threshold is higher than expected.
+
+- **Integer-math restructuring**: The formula `pi*10^N = 426880*Q*sqrt(10005)*10^N/R` can be restructured to compute sqrt(10005) at only guard_digits precision (tiny), then scale by 10^N separately. This avoids computing 10^(2*precision) which is 2× larger.
+
 - **Out-of-core mode is slower than expected at 1B digits**: On m7i.4xlarge (16 vCPU), OOC took 2291s vs 746s for normal mode (3× slower). Root causes: (1) 1024 chunks of 69K terms each — too many small chunks with high per-chunk overhead, (2) Phase 2 merge cascade through 10 levels adds 535s of sequential merging with disk I/O, (3) normal mode at 1B digits still uses depth=2 (4 branches) with good parallelism. OOC only wins when normal mode is forced to depth=1 (>1.4B digits) AND the machine has many idle cores. The real sweet spot is high-core-count machines (>64 vCPU) with multi-billion digit runs.

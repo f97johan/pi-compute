@@ -18,6 +18,9 @@
 - [x] FLINT multi-threaded multiplication: --flint flag (commit 58a5bb1)
 - [x] Integer-only math mode: --integer-math flag (commit 7d4d9a3)
 - [x] Pi verification script: verify_pi.py with 3 methods (commit 4e04e34)
+- [x] Fix GMP overflow for 50B: safe pow10, restructured formula (commits db343ae-85901d8)
+- [ ] 50B digit run on r8g.24xlarge (in progress, iterative mpz_pow10)
+- [ ] Threaded FFT multiplier (planned)
   - [x] NttEngine wrapping cuFFT
   - [x] Pointwise multiply CUDA kernel
   - [x] Carry propagation

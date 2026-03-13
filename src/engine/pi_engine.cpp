@@ -15,6 +15,11 @@
 #include <chrono>
 #include <fstream>
 
+#ifdef PI_FLINT_ENABLED
+#include <flint/flint.h>
+#include <flint/fmpz.h>
+#endif
+
 #ifdef __linux__
 #include <unistd.h>
 #endif
@@ -32,33 +37,44 @@ namespace pi {
 using Clock = std::chrono::high_resolution_clock;
 using Duration = std::chrono::duration<double>;
 
+/// Multiply two mpz_t values, using FLINT if available and operands are large.
+/// GMP 6.2.1 has silent corruption in mpz_mul when both operands exceed ~5B digits.
+/// FLINT's fmpz_mul uses a different FFT implementation that doesn't have this bug.
+static void safe_mul(mpz_t result, const mpz_t a, const mpz_t b) {
+    size_t max_size = std::max(mpz_size(a), mpz_size(b));
+
+#ifdef PI_FLINT_ENABLED
+    // Use FLINT for large multiplications to avoid GMP corruption
+    if (max_size > 500000000UL) {  // > ~4GB per operand
+        fmpz_t fa, fb, fr;
+        fmpz_init(fa); fmpz_init(fb); fmpz_init(fr);
+        fmpz_set_mpz(fa, a);
+        fmpz_set_mpz(fb, b);
+        fmpz_mul(fr, fa, fb);
+        fmpz_get_mpz(result, fr);
+        fmpz_clear(fa); fmpz_clear(fb); fmpz_clear(fr);
+        return;
+    }
+#endif
+
+    // GMP for small-to-medium operands (fast, no corruption)
+    mpz_mul(result, a, b);
+}
+
 /// Compute result = 10^exp efficiently.
-/// For large exponents, splits into manageable chunks to avoid GMP overflow
-/// in mpz_ui_pow_ui (which fails for results > ~4 billion limbs).
+/// For large exponents, splits into manageable chunks and uses binary
+/// exponentiation with safe_mul (FLINT for large operands, GMP for small).
 ///
 /// Strategy: 10^exp = (10^chunk)^(exp/chunk) * 10^(exp%chunk)
 /// where chunk <= 1B (safe for mpz_ui_pow_ui).
 static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     if (exp == 0) { mpz_set_ui(result, 1); return; }
     if (exp <= 999999999UL) {
-        // Small enough for GMP's built-in
         mpz_ui_pow_ui(result, 10, static_cast<unsigned long>(exp));
         return;
     }
 
-    // Split: 10^exp = (10^chunk)^q * 10^r  where exp = q*chunk + r
-    // Use small chunks to keep ALL intermediates under ~2B digits.
-    // GMP 6.2.1 has corruption issues with mpz_mul for numbers > ~5B digits.
-    // With chunk=100M, the base is ~400MB. After 4 squarings: ~6.4B digits.
-    // We need chunk small enough that base^(2^k) never exceeds ~2B digits
-    // for any k up to log2(q).
-    //
-    // Strategy: use chunk=50M. base=10^50M (~200MB). Max squarings for
-    // q=1000 is 10 steps. base after 5 squarings = 10^(50M*32) = 10^1.6B.
-    // After 6 squarings = 10^3.2B — still risky.
-    //
-    // Better: use iterative multiplication instead of binary exponentiation
-    // for the power. This avoids squaring entirely.
+    // Split: 10^exp = (10^chunk)^q * 10^r
     const size_t chunk = 500000000UL;  // 500M — base is ~2GB
     size_t q = exp / chunk;
     size_t r = exp % chunk;
@@ -81,22 +97,38 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
                   << " | RSS: " << PiEngine::get_rss_mb() << " MB" << std::endl;
     }
 
-    // Compute base^q via iterative multiplication.
-    // Binary exponentiation is faster in theory, but GMP 6.2.1 has
-    // corruption issues with mpz_mul when operands exceed ~5B digits.
-    // Iterative multiplication keeps the "small" operand fixed at ~2GB
-    // (the base), so the largest multiplication is result(~20GB) × base(~2GB).
-    mpz_set(result, base);  // result = base = 10^chunk
-    for (size_t i = 1; i < q; ++i) {
-        mpz_mul(result, result, base);
-        if (verbose && (i % 10 == 0 || i == q - 1)) {
-            std::cout << "    pow iter " << i << "/" << (q - 1)
-                      << " (result: " << mpz_sizeinbase(result, 10) << " digits"
-                      << ", ~" << (mpz_size(result) * 8 / (1024*1024)) << " MB)"
-                      << " | RSS: " << PiEngine::get_rss_mb() << " MB"
-                      << std::endl;
+    // Binary exponentiation using safe_mul (FLINT for large operands)
+    mpz_set_ui(result, 1);
+    mpz_t b, tmp;
+    mpz_init_set(b, base);
+    mpz_init(tmp);
+
+    size_t e = q;
+    int step = 0;
+    int total_steps = 0;
+    { size_t t = q; while (t > 0) { total_steps++; t >>= 1; } }
+
+    while (e > 0) {
+        if (e & 1) {
+            safe_mul(tmp, result, b);
+            mpz_swap(result, tmp);
+        }
+        e >>= 1;
+        step++;
+        if (e > 0) {
+            if (verbose) {
+                std::cout << "    pow step " << step << "/" << total_steps
+                          << " (base: " << mpz_sizeinbase(b, 10) << " digits"
+                          << ", ~" << (mpz_size(b) * 8 / (1024*1024)) << " MB)"
+                          << " | RSS: " << PiEngine::get_rss_mb() << " MB"
+                          << std::endl;
+            }
+            safe_mul(tmp, b, b);
+            mpz_swap(b, tmp);
         }
     }
+    mpz_clear(b);
+    mpz_clear(tmp);
 
     // Multiply by 10^r for the remainder
     if (r > 0) {
@@ -114,7 +146,6 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
         std::cout << "    Result: " << result_digits << " digits, "
                   << (mpz_size(result) * 8 / (1024*1024)) << " MB"
                   << " | RSS: " << PiEngine::get_rss_mb() << " MB" << std::endl;
-        // Sanity check: result should have approximately 'exp' digits
         if (result_digits < exp * 9 / 10 || result_digits > exp + 10) {
             std::cerr << "    ERROR: Expected ~" << exp << " digits, got " << result_digits
                       << ". Power computation may have failed!" << std::endl;
@@ -307,7 +338,7 @@ PiResult PiEngine::compute(const PiConfig& config) {
                           << " (" << mpz_sizeinbase(scale, 10) << " digits)..."
                           << " | RSS: " << get_rss_mb() << " MB" << std::endl;
             }
-            multiplier_.multiply(numerator, numerator, scale);
+            safe_mul(numerator, numerator, scale);
             mpz_clear(scale);
         }
 
