@@ -35,7 +35,8 @@ using Duration = std::chrono::duration<double>;
 /// Compute result = base^exp using binary exponentiation.
 /// Safe for arbitrarily large exponents (unlike mpz_ui_pow_ui which
 /// can overflow for results > ~4 billion limbs).
-static void mpz_pow_safe(mpz_t result, unsigned long base, size_t exp) {
+static void mpz_pow_safe(mpz_t result, unsigned long base, size_t exp,
+                          bool verbose = false) {
     if (exp == 0) { mpz_set_ui(result, 1); return; }
     if (exp <= 1000000000UL) {
         // Small enough for GMP's built-in (faster)
@@ -43,14 +44,29 @@ static void mpz_pow_safe(mpz_t result, unsigned long base, size_t exp) {
         return;
     }
     // Binary exponentiation for large exponents
+    // Count total steps for progress reporting
+    int total_steps = 0;
+    { size_t tmp = exp; while (tmp > 0) { total_steps++; tmp >>= 1; } }
+
     mpz_t b;
     mpz_init_set_ui(b, base);
     mpz_set_ui(result, 1);
     size_t e = exp;
+    int step = 0;
     while (e > 0) {
         if (e & 1) mpz_mul(result, result, b);
         e >>= 1;
-        if (e > 0) mpz_mul(b, b, b);
+        step++;
+        if (e > 0) {
+            if (verbose && step % 5 == 0) {
+                std::cout << "    pow step " << step << "/" << total_steps
+                          << " (base: " << mpz_sizeinbase(b, 10) << " digits"
+                          << ", ~" << (mpz_size(b) * 8 / (1024*1024)) << " MB)"
+                          << " | RSS: " << PiEngine::get_rss_mb() << " MB"
+                          << std::endl;
+            }
+            mpz_mul(b, b, b);
+        }
     }
     mpz_clear(b);
 }
@@ -190,7 +206,10 @@ PiResult PiEngine::compute(const PiConfig& config) {
 
         // S = 10005 * 10^(2*precision)
         // Uses safe binary exponentiation (mpz_ui_pow_ui overflows for large exponents)
-        mpz_pow_safe(S, 10, 2 * precision);
+        if (config.verbose) {
+            std::cout << "  Computing 10^" << (2 * precision) << " via binary exponentiation..." << std::endl;
+        }
+        mpz_pow_safe(S, 10, 2 * precision, config.verbose);
         mpz_mul_ui(S, S, 10005);
 
         // sqrt_val = isqrt(S) = floor(sqrt(10005 * 10^(2*precision)))
