@@ -17,6 +17,7 @@
 - [x] Out-of-core binary splitting: --out-of-core flag (commit db6f529)
 - [x] FLINT multi-threaded multiplication: --flint flag (commit 58a5bb1)
 - [x] Integer-only math mode: --integer-math flag (commit 7d4d9a3)
+- [x] Pi verification script: verify_pi.py with 3 methods (commit 4e04e34)
   - [x] NttEngine wrapping cuFFT
   - [x] Pointwise multiply CUDA kernel
   - [x] Carry propagation

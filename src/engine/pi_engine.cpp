@@ -32,6 +32,29 @@ namespace pi {
 using Clock = std::chrono::high_resolution_clock;
 using Duration = std::chrono::duration<double>;
 
+/// Compute result = base^exp using binary exponentiation.
+/// Safe for arbitrarily large exponents (unlike mpz_ui_pow_ui which
+/// can overflow for results > ~4 billion limbs).
+static void mpz_pow_safe(mpz_t result, unsigned long base, size_t exp) {
+    if (exp == 0) { mpz_set_ui(result, 1); return; }
+    if (exp <= 1000000000UL) {
+        // Small enough for GMP's built-in (faster)
+        mpz_ui_pow_ui(result, base, static_cast<unsigned long>(exp));
+        return;
+    }
+    // Binary exponentiation for large exponents
+    mpz_t b;
+    mpz_init_set_ui(b, base);
+    mpz_set_ui(result, 1);
+    size_t e = exp;
+    while (e > 0) {
+        if (e & 1) mpz_mul(result, result, b);
+        e >>= 1;
+        if (e > 0) mpz_mul(b, b, b);
+    }
+    mpz_clear(b);
+}
+
 PiEngine::PiEngine(Multiplier& multiplier)
     : multiplier_(multiplier) {}
 
@@ -166,7 +189,8 @@ PiResult PiEngine::compute(const PiConfig& config) {
         mpz_init(S); mpz_init(sqrt_val);
 
         // S = 10005 * 10^(2*precision)
-        mpz_ui_pow_ui(S, 10, 2 * precision);
+        // Uses safe binary exponentiation (mpz_ui_pow_ui overflows for large exponents)
+        mpz_pow_safe(S, 10, 2 * precision);
         mpz_mul_ui(S, S, 10005);
 
         // sqrt_val = isqrt(S) = floor(sqrt(10005 * 10^(2*precision)))
