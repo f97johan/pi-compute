@@ -32,33 +32,58 @@ namespace pi {
 using Clock = std::chrono::high_resolution_clock;
 using Duration = std::chrono::duration<double>;
 
-/// Compute result = base^exp using binary exponentiation.
-/// Safe for arbitrarily large exponents (unlike mpz_ui_pow_ui which
-/// can overflow for results > ~4 billion limbs).
-static void mpz_pow_safe(mpz_t result, unsigned long base, size_t exp,
-                          bool verbose = false) {
+/// Compute result = 10^exp efficiently.
+/// For large exponents, splits into manageable chunks to avoid GMP overflow
+/// in mpz_ui_pow_ui (which fails for results > ~4 billion limbs).
+///
+/// Strategy: 10^exp = (10^chunk)^(exp/chunk) * 10^(exp%chunk)
+/// where chunk <= 1B (safe for mpz_ui_pow_ui).
+static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     if (exp == 0) { mpz_set_ui(result, 1); return; }
-    if (exp <= 1000000000UL) {
-        // Small enough for GMP's built-in (faster)
-        mpz_ui_pow_ui(result, base, static_cast<unsigned long>(exp));
+    if (exp <= 999999999UL) {
+        // Small enough for GMP's built-in
+        mpz_ui_pow_ui(result, 10, static_cast<unsigned long>(exp));
         return;
     }
-    // Binary exponentiation for large exponents
-    // Count total steps for progress reporting
-    int total_steps = 0;
-    { size_t tmp = exp; while (tmp > 0) { total_steps++; tmp >>= 1; } }
 
-    mpz_t b;
-    mpz_init_set_ui(b, base);
+    // Split: 10^exp = (10^chunk)^q * 10^r  where exp = q*chunk + r
+    const size_t chunk = 500000000UL;  // 500M — result is ~2 GB, safe for GMP
+    size_t q = exp / chunk;
+    size_t r = exp % chunk;
+
+    if (verbose) {
+        std::cout << "    Computing 10^" << exp << " = (10^" << chunk << ")^" << q;
+        if (r > 0) std::cout << " * 10^" << r;
+        std::cout << std::endl;
+    }
+
+    // Compute base = 10^chunk
+    mpz_t base;
+    mpz_init(base);
+    mpz_ui_pow_ui(base, 10, static_cast<unsigned long>(chunk));
+
+    if (verbose) {
+        std::cout << "    Base 10^" << chunk << ": "
+                  << mpz_sizeinbase(base, 10) << " digits, "
+                  << (mpz_size(base) * 8 / (1024*1024)) << " MB"
+                  << " | RSS: " << PiEngine::get_rss_mb() << " MB" << std::endl;
+    }
+
+    // Compute base^q via binary exponentiation
     mpz_set_ui(result, 1);
-    size_t e = exp;
+    mpz_t b;
+    mpz_init_set(b, base);
+    size_t e = q;
     int step = 0;
+    int total_steps = 0;
+    { size_t tmp = q; while (tmp > 0) { total_steps++; tmp >>= 1; } }
+
     while (e > 0) {
         if (e & 1) mpz_mul(result, result, b);
         e >>= 1;
         step++;
         if (e > 0) {
-            if (verbose && (step % 5 == 0 || step >= 30)) {
+            if (verbose) {
                 std::cout << "    pow step " << step << "/" << total_steps
                           << " (base: " << mpz_sizeinbase(b, 10) << " digits"
                           << ", ~" << (mpz_size(b) * 8 / (1024*1024)) << " MB)"
@@ -69,6 +94,23 @@ static void mpz_pow_safe(mpz_t result, unsigned long base, size_t exp,
         }
     }
     mpz_clear(b);
+
+    // Multiply by 10^r for the remainder
+    if (r > 0) {
+        mpz_t tail;
+        mpz_init(tail);
+        mpz_ui_pow_ui(tail, 10, static_cast<unsigned long>(r));
+        mpz_mul(result, result, tail);
+        mpz_clear(tail);
+    }
+
+    mpz_clear(base);
+
+    if (verbose) {
+        std::cout << "    Result: " << mpz_sizeinbase(result, 10) << " digits, "
+                  << (mpz_size(result) * 8 / (1024*1024)) << " MB"
+                  << " | RSS: " << PiEngine::get_rss_mb() << " MB" << std::endl;
+    }
 }
 
 PiEngine::PiEngine(Multiplier& multiplier)
@@ -205,11 +247,10 @@ PiResult PiEngine::compute(const PiConfig& config) {
         mpz_init(S); mpz_init(sqrt_val);
 
         // S = 10005 * 10^(2*precision)
-        // Uses safe binary exponentiation (mpz_ui_pow_ui overflows for large exponents)
         if (config.verbose) {
-            std::cout << "  Computing 10^" << (2 * precision) << " via binary exponentiation..." << std::endl;
+            std::cout << "  Computing 10^" << (2 * precision) << "..." << std::endl;
         }
-        mpz_pow_safe(S, 10, 2 * precision, config.verbose);
+        mpz_pow10(S, 2 * precision, config.verbose);
         mpz_mul_ui(S, S, 10005);
 
         // sqrt_val = isqrt(S) = floor(sqrt(10005 * 10^(2*precision)))
