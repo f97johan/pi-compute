@@ -47,7 +47,15 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     }
 
     // Split: 10^exp = (10^chunk)^q * 10^r  where exp = q*chunk + r
-    const size_t chunk = 500000000UL;  // 500M — result is ~2 GB, safe for GMP
+    // Use smaller chunks for very large exponents to keep intermediates manageable
+    size_t chunk;
+    if (exp > 50000000000UL) {
+        chunk = 100000000UL;  // 100M for >50B digit exponents
+    } else if (exp > 10000000000UL) {
+        chunk = 200000000UL;  // 200M for >10B digit exponents
+    } else {
+        chunk = 500000000UL;  // 500M for smaller exponents
+    }
     size_t q = exp / chunk;
     size_t r = exp % chunk;
 
@@ -107,9 +115,15 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     mpz_clear(base);
 
     if (verbose) {
-        std::cout << "    Result: " << mpz_sizeinbase(result, 10) << " digits, "
+        size_t result_digits = mpz_sizeinbase(result, 10);
+        std::cout << "    Result: " << result_digits << " digits, "
                   << (mpz_size(result) * 8 / (1024*1024)) << " MB"
                   << " | RSS: " << PiEngine::get_rss_mb() << " MB" << std::endl;
+        // Sanity check: result should have approximately 'exp' digits
+        if (result_digits < exp * 9 / 10 || result_digits > exp + 10) {
+            std::cerr << "    ERROR: Expected ~" << exp << " digits, got " << result_digits
+                      << ". Power computation may have failed!" << std::endl;
+        }
     }
 }
 
@@ -225,50 +239,47 @@ PiResult PiEngine::compute(const PiConfig& config) {
     if (!loaded_pi_int && config.integer_math) {
         // ============================================================
         // INTEGER-ONLY PATH: all computation using mpz (no mpf)
-        // pi * 10^N = 426880 * Q * isqrt(10005 * 10^(2*precision)) / R
         //
-        // Advantages:
-        // - mpz_mul benefits from our parallel merge (multi-core)
-        // - Avoids single-threaded mpf_sqrt and mpf_div
-        // - No mpf_set_z conversion overhead
+        // Restructured formula to avoid computing 10^(2*precision):
+        //   pi_int = 426880 * Q * sqrt_small * 10^digits / (R * 10^guard)
+        //
+        // where sqrt_small = isqrt(10005 * 10^(2*guard)) is tiny (~100 digits)
+        // and 10^digits is the only large power of 10 needed.
+        //
+        // This avoids the 100B-digit intermediate (10^(2*50B)) that caused
+        // GMP segfaults due to internal limits on very large mpz_mul.
         // ============================================================
 
         if (config.verbose) {
             std::cout << "  Using integer-only math (no mpf)" << std::endl;
         }
 
-        // Step 2a: Compute isqrt(10005 * 10^(2*precision)) using GMP's mpz_sqrt
-        // This gives sqrt(10005) * 10^precision as an integer.
-        // mpz_sqrt uses Karatsuba square root internally — much faster than
-        // Newton iteration with mpz_tdiv_q.
+        // Step 2a: Compute sqrt(10005) at guard_digits precision (tiny)
         auto sqrt_start = Clock::now();
 
-        mpz_t S, sqrt_val;
-        mpz_init(S); mpz_init(sqrt_val);
-
-        // S = 10005 * 10^(2*precision)
-        if (config.verbose) {
-            std::cout << "  Computing 10^" << (2 * precision) << "..." << std::endl;
+        mpz_t sqrt_val;
+        mpz_init(sqrt_val);
+        {
+            mpz_t S;
+            mpz_init(S);
+            mpz_ui_pow_ui(S, 10, 2 * guard_digits);  // 10^200 — tiny
+            mpz_mul_ui(S, S, 10005);
+            mpz_sqrt(sqrt_val, S);  // sqrt(10005) * 10^guard_digits (~100 digits)
+            mpz_clear(S);
         }
-        mpz_pow10(S, 2 * precision, config.verbose);
-        mpz_mul_ui(S, S, 10005);
-
-        // sqrt_val = isqrt(S) = floor(sqrt(10005 * 10^(2*precision)))
-        //          = floor(sqrt(10005) * 10^precision)
-        mpz_sqrt(sqrt_val, S);
-        mpz_clear(S);
 
         auto sqrt_end = Clock::now();
         sqrt_time = Duration(sqrt_end - sqrt_start).count();
 
         if (config.verbose) {
-            std::cout << "  Integer sqrt (mpz_sqrt): " << std::fixed << std::setprecision(3)
-                      << sqrt_time << "s"
+            std::cout << "  Integer sqrt(10005) at " << guard_digits << " extra digits: "
+                      << std::fixed << std::setprecision(3) << sqrt_time << "s"
+                      << " (" << mpz_sizeinbase(sqrt_val, 10) << " digits)"
                       << " | RSS: " << get_rss_mb() << " MB" << std::endl;
         }
 
-        // Step 2b: Compute pi_int = 426880 * Q * sqrt_val / (R * 10^guard_digits)
-        // We have extra 'guard_digits' of precision that we need to remove.
+        // Step 2b: Compute pi_int
+        // pi_int = 426880 * Q * sqrt_val * 10^digits / (R * 10^guard_digits)
         auto div_start_t = Clock::now();
 
         // numerator = 426880 * Q * sqrt_val
@@ -277,20 +288,58 @@ PiResult PiEngine::compute(const PiConfig& config) {
         mpz_mul_ui(numerator, bsr.Q, 426880);
         mpz_realloc2(bsr.Q, 0);  // Free Q
 
-        multiplier_.multiply(numerator, numerator, sqrt_val);  // Uses parallel merge!
+        // sqrt_val is small (~100 digits), so plain mpz_mul is fine
+        mpz_mul(numerator, numerator, sqrt_val);
         mpz_clear(sqrt_val);
 
-        // denominator = R * 10^guard_digits
+        if (config.verbose) {
+            std::cout << "  Numerator (426880*Q*sqrt): "
+                      << mpz_sizeinbase(numerator, 10) << " digits"
+                      << " | RSS: " << get_rss_mb() << " MB" << std::endl;
+        }
+
+        // Scale numerator by 10^digits
+        if (config.verbose) {
+            std::cout << "  Computing 10^" << config.digits << " for scaling..." << std::endl;
+        }
+        {
+            mpz_t scale;
+            mpz_init(scale);
+            mpz_pow10(scale, config.digits, config.verbose);
+
+            if (config.verbose) {
+                std::cout << "  Multiplying numerator by 10^" << config.digits
+                          << " (" << mpz_sizeinbase(scale, 10) << " digits)..."
+                          << " | RSS: " << get_rss_mb() << " MB" << std::endl;
+            }
+            multiplier_.multiply(numerator, numerator, scale);
+            mpz_clear(scale);
+        }
+
+        if (config.verbose) {
+            std::cout << "  Scaled numerator: "
+                      << mpz_sizeinbase(numerator, 10) << " digits"
+                      << " | RSS: " << get_rss_mb() << " MB" << std::endl;
+        }
+
+        // denominator = R * 10^guard_digits (guard_digits is small, ~100)
         mpz_t denominator;
         mpz_init(denominator);
-        mpz_t guard_scale;
-        mpz_init(guard_scale);
-        mpz_ui_pow_ui(guard_scale, 10, guard_digits);
-        multiplier_.multiply(denominator, bsr.R, guard_scale);
-        mpz_clear(guard_scale);
+        {
+            mpz_t guard_scale;
+            mpz_init(guard_scale);
+            mpz_ui_pow_ui(guard_scale, 10, guard_digits);  // 10^100 — tiny
+            mpz_mul(denominator, bsr.R, guard_scale);
+            mpz_clear(guard_scale);
+        }
         mpz_realloc2(bsr.R, 0);  // Free R
 
         // pi_int = numerator / denominator
+        if (config.verbose) {
+            std::cout << "  Final division: " << mpz_sizeinbase(numerator, 10)
+                      << " / " << mpz_sizeinbase(denominator, 10) << " digits..."
+                      << " | RSS: " << get_rss_mb() << " MB" << std::endl;
+        }
         mpz_tdiv_q(pi_int, numerator, denominator);
         mpz_clear(numerator);
         mpz_clear(denominator);
