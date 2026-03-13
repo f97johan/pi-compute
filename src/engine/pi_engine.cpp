@@ -58,7 +58,7 @@ static void mpz_pow_safe(mpz_t result, unsigned long base, size_t exp,
         e >>= 1;
         step++;
         if (e > 0) {
-            if (verbose && step % 5 == 0) {
+            if (verbose && (step % 5 == 0 || step >= 30)) {
                 std::cout << "    pow step " << step << "/" << total_steps
                           << " (base: " << mpz_sizeinbase(b, 10) << " digits"
                           << ", ~" << (mpz_size(b) * 8 / (1024*1024)) << " MB)"
