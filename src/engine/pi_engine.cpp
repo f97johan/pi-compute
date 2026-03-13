@@ -323,6 +323,16 @@ PiResult PiEngine::compute(const PiConfig& config) {
         // numerator = 426880 * Q * sqrt_val
         mpz_t numerator;
         mpz_init(numerator);
+
+        if (config.verbose) {
+            std::cout << "  Q size: " << mpz_sizeinbase(bsr.Q, 10) << " digits, "
+                      << (mpz_size(bsr.Q) * 8 / (1024*1024)) << " MB, sign="
+                      << mpz_sgn(bsr.Q) << std::endl;
+            std::cout << "  R size: " << mpz_sizeinbase(bsr.R, 10) << " digits, "
+                      << (mpz_size(bsr.R) * 8 / (1024*1024)) << " MB, sign="
+                      << mpz_sgn(bsr.R) << std::endl;
+        }
+
         mpz_mul_ui(numerator, bsr.Q, 426880);
         mpz_realloc2(bsr.Q, 0);  // Free Q
 
