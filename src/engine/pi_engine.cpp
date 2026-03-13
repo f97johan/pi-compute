@@ -47,15 +47,19 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     }
 
     // Split: 10^exp = (10^chunk)^q * 10^r  where exp = q*chunk + r
-    // Use smaller chunks for very large exponents to keep intermediates manageable
-    size_t chunk;
-    if (exp > 50000000000UL) {
-        chunk = 100000000UL;  // 100M for >50B digit exponents
-    } else if (exp > 10000000000UL) {
-        chunk = 200000000UL;  // 200M for >10B digit exponents
-    } else {
-        chunk = 500000000UL;  // 500M for smaller exponents
-    }
+    // Use small chunks to keep ALL intermediates under ~2B digits.
+    // GMP 6.2.1 has corruption issues with mpz_mul for numbers > ~5B digits.
+    // With chunk=100M, the base is ~400MB. After 4 squarings: ~6.4B digits.
+    // We need chunk small enough that base^(2^k) never exceeds ~2B digits
+    // for any k up to log2(q).
+    //
+    // Strategy: use chunk=50M. base=10^50M (~200MB). Max squarings for
+    // q=1000 is 10 steps. base after 5 squarings = 10^(50M*32) = 10^1.6B.
+    // After 6 squarings = 10^3.2B — still risky.
+    //
+    // Better: use iterative multiplication instead of binary exponentiation
+    // for the power. This avoids squaring entirely.
+    const size_t chunk = 500000000UL;  // 500M — base is ~2GB
     size_t q = exp / chunk;
     size_t r = exp % chunk;
 
@@ -77,41 +81,22 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
                   << " | RSS: " << PiEngine::get_rss_mb() << " MB" << std::endl;
     }
 
-    // Compute base^q via binary exponentiation
-    mpz_set_ui(result, 1);
-    mpz_t b;
-    mpz_init_set(b, base);
-    size_t e = q;
-    int step = 0;
-    int total_steps = 0;
-    { size_t tmp = q; while (tmp > 0) { total_steps++; tmp >>= 1; } }
-
-    // Use a temporary for squaring to avoid in-place aliasing issues
-    // (GMP's mpz_mul may have issues with mpz_mul(x, x, x) for very large x)
-    mpz_t tmp;
-    mpz_init(tmp);
-
-    while (e > 0) {
-        if (e & 1) {
-            mpz_mul(tmp, result, b);
-            mpz_swap(result, tmp);
-        }
-        e >>= 1;
-        step++;
-        if (e > 0) {
-            if (verbose) {
-                std::cout << "    pow step " << step << "/" << total_steps
-                          << " (base: " << mpz_sizeinbase(b, 10) << " digits"
-                          << ", ~" << (mpz_size(b) * 8 / (1024*1024)) << " MB)"
-                          << " | RSS: " << PiEngine::get_rss_mb() << " MB"
-                          << std::endl;
-            }
-            mpz_mul(tmp, b, b);  // Square into tmp, not in-place
-            mpz_swap(b, tmp);
+    // Compute base^q via iterative multiplication.
+    // Binary exponentiation is faster in theory, but GMP 6.2.1 has
+    // corruption issues with mpz_mul when operands exceed ~5B digits.
+    // Iterative multiplication keeps the "small" operand fixed at ~2GB
+    // (the base), so the largest multiplication is result(~20GB) × base(~2GB).
+    mpz_set(result, base);  // result = base = 10^chunk
+    for (size_t i = 1; i < q; ++i) {
+        mpz_mul(result, result, base);
+        if (verbose && (i % 10 == 0 || i == q - 1)) {
+            std::cout << "    pow iter " << i << "/" << (q - 1)
+                      << " (result: " << mpz_sizeinbase(result, 10) << " digits"
+                      << ", ~" << (mpz_size(result) * 8 / (1024*1024)) << " MB)"
+                      << " | RSS: " << PiEngine::get_rss_mb() << " MB"
+                      << std::endl;
         }
     }
-    mpz_clear(b);
-    mpz_clear(tmp);
 
     // Multiply by 10^r for the remainder
     if (r > 0) {
