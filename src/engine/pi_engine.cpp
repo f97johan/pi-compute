@@ -86,8 +86,16 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
     int total_steps = 0;
     { size_t tmp = q; while (tmp > 0) { total_steps++; tmp >>= 1; } }
 
+    // Use a temporary for squaring to avoid in-place aliasing issues
+    // (GMP's mpz_mul may have issues with mpz_mul(x, x, x) for very large x)
+    mpz_t tmp;
+    mpz_init(tmp);
+
     while (e > 0) {
-        if (e & 1) mpz_mul(result, result, b);
+        if (e & 1) {
+            mpz_mul(tmp, result, b);
+            mpz_swap(result, tmp);
+        }
         e >>= 1;
         step++;
         if (e > 0) {
@@ -98,10 +106,12 @@ static void mpz_pow10(mpz_t result, size_t exp, bool verbose = false) {
                           << " | RSS: " << PiEngine::get_rss_mb() << " MB"
                           << std::endl;
             }
-            mpz_mul(b, b, b);
+            mpz_mul(tmp, b, b);  // Square into tmp, not in-place
+            mpz_swap(b, tmp);
         }
     }
     mpz_clear(b);
+    mpz_clear(tmp);
 
     // Multiply by 10^r for the remainder
     if (r > 0) {
