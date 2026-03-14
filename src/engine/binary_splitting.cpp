@@ -164,17 +164,16 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
     size_t max_size = std::max({mpz_size(left.P), mpz_size(left.Q),
                                  mpz_size(right.P), mpz_size(right.Q)});
 
-    // Three-tier merge strategy based on operand size:
+    // Four-tier merge strategy based on operand size:
     //
     // Tier 1 (small, <1K limbs): Sequential — no parallelism overhead
     // Tier 2 (medium, 1K–50M limbs): Full parallel — 4 concurrent muls, 4 cores
-    // Tier 3 (large, >50M limbs): Semi-parallel — 2 concurrent muls at a time,
-    //         2 cores, with aggressive early freeing between pairs
-    //
-    // Tier 3 gives 2x throughput over sequential while keeping memory bounded:
-    // - Only 2 multiplications alive at once (vs 4 in tier 2)
-    // - Inputs freed between pairs, so peak is ~2x one multiplication
+    // Tier 3 (large, 50M–600M limbs): Semi-parallel — 2 concurrent muls at a time
+    // Tier 4 (huge, >600M limbs): Fully sequential — FLINT may be used for these,
+    //         and concurrent FLINT conversions (mpz→fmpz) double memory usage.
+    //         Sequential ensures only 1 FLINT multiplication at a time.
     static constexpr size_t PARALLEL_MERGE_MAX_LIMBS = 50000000;
+    static constexpr size_t FLINT_MERGE_THRESHOLD = 600000000;  // ~5B digits
 
     if (max_size > 1000 && max_size < PARALLEL_MERGE_MAX_LIMBS && num_threads_ > 1) {
         // TIER 2: Full parallel merge — 4 multiplications run concurrently.
@@ -201,9 +200,10 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
         mpz_swap(result.P, t_pp);
         mpz_clear(t_qr); mpz_clear(t_pr); mpz_clear(t_pp);
 
-    } else if (max_size >= PARALLEL_MERGE_MAX_LIMBS && num_threads_ > 1) {
+    } else if (max_size >= PARALLEL_MERGE_MAX_LIMBS && max_size < FLINT_MERGE_THRESHOLD && num_threads_ > 1) {
         // TIER 3: Semi-parallel merge — 2 concurrent muls at a time.
         // Uses 2 cores while keeping memory bounded.
+        // Only for operands below the FLINT threshold (50M–600M limbs).
         //
         // Pair 1: temp1 = Q_right * R_left  ||  result.R = P_left * R_right
         // Then free R_left, R_right
@@ -240,6 +240,31 @@ BSResult BinarySplitting::merge_parallel(BSResult& left, BSResult& right) {
         // Free all remaining inputs
         mpz_realloc2(left.P, 0); mpz_realloc2(left.Q, 0);
         mpz_realloc2(right.P, 0); mpz_realloc2(right.Q, 0);
+
+    } else if (max_size >= FLINT_MERGE_THRESHOLD) {
+        // TIER 4: Fully sequential merge for FLINT-sized operands (>600M limbs).
+        // FLINT's fmpz_mul copies data (mpz→fmpz→mpz), so concurrent FLINT
+        // multiplications would double memory usage and cause OOM on 768GB.
+        // Sequential ensures only 1 FLINT multiplication at a time.
+        mpz_t temp1;
+        mpz_init(temp1);
+
+        multiplier_.multiply(temp1, right.Q, left.R);
+        mpz_realloc2(left.R, 0);
+
+        multiplier_.multiply(result.R, left.P, right.R);
+        mpz_realloc2(right.R, 0);
+
+        mpz_add(result.R, result.R, temp1);
+        mpz_clear(temp1);
+
+        multiplier_.multiply(result.P, left.P, right.P);
+        mpz_realloc2(left.P, 0);
+        mpz_realloc2(right.P, 0);
+
+        multiplier_.multiply(result.Q, left.Q, right.Q);
+        mpz_realloc2(left.Q, 0);
+        mpz_realloc2(right.Q, 0);
 
     } else {
         // TIER 1: Sequential merge (single-threaded or tiny operands).

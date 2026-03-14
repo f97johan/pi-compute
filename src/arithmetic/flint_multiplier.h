@@ -25,7 +25,15 @@ public:
      *                        Below this, GMP is used directly. Default: 10000
      *                        (~80K digits). Set to 0 to always use FLINT.
      */
-    explicit FlintMultiplier(unsigned int num_threads = 0, size_t threshold_limbs = 10000);
+    /**
+     * @param num_threads Number of threads for FLINT (0 = auto-detect)
+     * @param threshold_limbs Min operand size (in GMP limbs) to use FLINT.
+     *                        Below this, GMP is used directly.
+     *                        Default: 600000000 (~5B digits) — only use FLINT
+     *                        where GMP has known corruption issues.
+     *                        Set to 0 to always use FLINT.
+     */
+    explicit FlintMultiplier(unsigned int num_threads = 0, size_t threshold_limbs = 600000000);
     ~FlintMultiplier() override = default;
 
     void multiply(mpz_t result, const mpz_t a, const mpz_t b) override;

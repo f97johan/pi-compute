@@ -46,8 +46,10 @@ static void safe_mul(mpz_t result, const mpz_t a, const mpz_t b,
     size_t max_size = std::max(sa, sb);
 
 #ifdef PI_FLINT_ENABLED
-    // Use FLINT for large multiplications to avoid GMP corruption
-    if (max_size > 500000000UL) {  // > ~4GB per operand
+    // Use FLINT only for very large multiplications where GMP has corruption.
+    // GMP corrupts results when both operands exceed ~5B digits (~625M limbs).
+    // Using FLINT for smaller operands wastes memory (mpz→fmpz copies).
+    if (max_size > 600000000UL) {  // > ~5B digits per operand
         if (verbose) {
             std::cout << "      [safe_mul] Using FLINT: " << sa << " × " << sb
                       << " limbs" << std::endl;
