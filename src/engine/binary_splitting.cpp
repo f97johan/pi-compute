@@ -47,7 +47,15 @@ static std::string ckpt_path(const std::string& dir, unsigned long a, unsigned l
 
 static bool save_bs_result(const std::string& path, const BSResult& r) {
     FILE* f = fopen(path.c_str(), "wb");
-    if (!f) return false;
+    if (!f) {
+        static bool warned = false;
+        if (!warned) {
+            std::cerr << "  WARNING: Cannot write checkpoint: " << path
+                      << " (permission denied or disk full)" << std::endl;
+            warned = true;
+        }
+        return false;
+    }
     auto write_mpz = [&](const mpz_t val) {
         int sign = mpz_sgn(val);
         size_t count = 0;
