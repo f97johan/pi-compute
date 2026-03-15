@@ -184,10 +184,12 @@ int main(int argc, char* argv[]) {
         }
 #endif
 
-        // Write to file
-        pi::ChunkedWriter writer(config.output_file);
-        writer.write(result.digits);
-        writer.close();
+        // Write to file (skip if already streamed by pi_engine)
+        if (result.digits.find("(streamed to") == std::string::npos) {
+            pi::ChunkedWriter writer(config.output_file);
+            writer.write(result.digits);
+            writer.close();
+        }
 
         std::cout << "Computed " << config.digits << " digits of pi in "
                   << result.elapsed_seconds << " seconds ("
